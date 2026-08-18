@@ -6,7 +6,7 @@ This document provides structured, deterministic instructions for AI coding assi
 
 ## 🎯 Repository Purpose
 
-`antigravity-telegram` is an asynchronous Python Telegram bot based on `aiogram 3.x` that acts as a mobile remote control for local Google Antigravity environments. It features a Dual-Engine bridge (CLI `agy` vs Python SDK), in-place live streaming, Groq Whisper voice input, multimodal file routing, and a 2-Tier Security Model.
+`antigravity-telegram` is an asynchronous Python Telegram bot based on `aiogram 3.x` that acts as a mobile remote control for local Google Antigravity environments. It features a Dual-Engine bridge (CLI `agy` vs Python SDK), in-place live streaming, Groq Whisper voice input, multimodal file routing, built-in multi-language localization (`en` / `ru`), and a 2-Tier Security Model.
 
 ---
 
@@ -30,6 +30,7 @@ antigravity-tg-bro/
 │   ├── config.py               # Pydantic-based settings with environment isolation
 │   ├── bot/
 │   │   ├── app.py              # Bot & Dispatcher setup
+│   │   ├── locales.py          # i18n localization dictionary (en / ru)
 │   │   ├── handlers/           # Route handlers (chat, chats, settings, common)
 │   │   ├── keyboards/          # Inline and Reply keyboards
 │   │   ├── middlewares/        # Authentication & error filtering
@@ -64,13 +65,18 @@ antigravity-tg-bro/
 4. **Atomic Disk Persistence**:
    - `sessions.json` is always saved via writing to a `.tmp` file and renaming via `os.replace` to prevent corrupted JSON writes.
 
+5. **Multi-Language (i18n) Engine**:
+   - All user-facing strings must be retrieved via `t(key, session.language, **kwargs)` from `src/bot/locales.py`.
+   - Default language is defined in `settings.BOT_LANGUAGE` (`en` by default).
+   - When adding new UI text or commands, always provide both `en` and `ru` translations in `src/bot/locales.py`.
+
 ---
 
 ## 🛠️ Verification & Test Recipes
 
 ### Run All Unit & Offline Tests
 ```bash
-pytest tests/test_offline_components.py
+python3 -m unittest tests/test_offline_components.py
 ```
 
 ### Run Security Pre-Flight Scan

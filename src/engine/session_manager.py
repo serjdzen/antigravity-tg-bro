@@ -36,7 +36,8 @@ class UserSession:
     current_model: str = "gemini-3.7-flash"
     reasoning_effort: str = "low"  # "low" | "medium" | "high" | "off"
     engine_mode: str = "cli"  # "cli" | "sdk"
-    safety_approval: bool = True  # Подтверждение опасных действий (кнопки в Telegram)
+    safety_approval: bool = True  # Inline confirmation for destructive commands
+    language: str = field(default_factory=lambda: settings.BOT_LANGUAGE)  # "en" | "ru"
     active_chat_id: Optional[str] = None
     chats: Dict[str, ChatThread] = field(default_factory=dict)
     is_busy: bool = False
@@ -46,7 +47,7 @@ class UserSession:
     def get_active_chat(self) -> ChatThread:
         if not self.active_chat_id or self.active_chat_id not in self.chats:
             chat_id = str(uuid.uuid4())[:8]
-            default_title = f"💬 Основной чат ({self.current_project_dir.name or 'work'})"
+            default_title = f"💬 Main ({self.current_project_dir.name or 'work'})"
             new_chat = ChatThread(
                 id=chat_id,
                 title=default_title,
@@ -60,7 +61,7 @@ class UserSession:
 
     def create_new_chat(self, title: Optional[str] = None) -> ChatThread:
         chat_id = str(uuid.uuid4())[:8]
-        chat_title = title or f"💬 Чат #{len(self.chats) + 1} ({self.current_project_dir.name or 'work'})"
+        chat_title = title or f"💬 Thread #{len(self.chats) + 1} ({self.current_project_dir.name or 'work'})"
         new_chat = ChatThread(
             id=chat_id,
             title=chat_title,
@@ -97,7 +98,7 @@ class UserSession:
     def reset_conversation(self):
         self.conversation_history.clear()
         self.create_new_chat()
-        logger.info(f"Сброшена история диалога и создан новый чат для пользователя {self.user_id}")
+        logger.info(f"Reset conversation history and created new chat thread for user {self.user_id}")
 
 
 class SessionManager:
@@ -120,7 +121,8 @@ class SessionManager:
                 current_model="gemini-3.7-flash",
                 reasoning_effort="low",
                 engine_mode="cli",
-                safety_approval=True
+                safety_approval=True,
+                language=settings.BOT_LANGUAGE
             )
             session.get_active_chat()
             self._sessions[user_id] = session
@@ -143,17 +145,17 @@ class SessionManager:
                     "reasoning_effort": s.reasoning_effort,
                     "engine_mode": s.engine_mode,
                     "safety_approval": s.safety_approval,
+                    "language": s.language,
                     "active_chat_id": s.active_chat_id,
                     "chats": chats_dict
                 }
 
-            # Атомарная запись через временный файл: исключает повреждение файла при аварийных сбоях
             temp_file = SESSIONS_FILE.with_suffix(".tmp")
             temp_file.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
             temp_file.replace(SESSIONS_FILE)
-            logger.debug(f"Сессии пользователей успешно атомарно сохранены в {SESSIONS_FILE}")
+            logger.debug(f"User sessions successfully saved to {SESSIONS_FILE}")
         except Exception as e:
-            logger.error(f"Ошибка сохранения сессий на диск: {e}")
+            logger.error(f"Error saving sessions to disk: {e}")
 
     def _load_from_disk(self):
         if not SESSIONS_FILE.exists():
@@ -181,14 +183,15 @@ class SessionManager:
                     reasoning_effort=s_data.get("reasoning_effort", "low"),
                     engine_mode=s_data.get("engine_mode", "cli"),
                     safety_approval=s_data.get("safety_approval", True),
+                    language=s_data.get("language", settings.BOT_LANGUAGE),
                     active_chat_id=s_data.get("active_chat_id"),
                     chats=chats
                 )
                 session.get_active_chat()
                 self._sessions[uid] = session
-            logger.info(f"Загружено {len(self._sessions)} постоянных сессий пользователей с диска")
+            logger.info(f"Loaded {len(self._sessions)} persistent user sessions from disk")
         except Exception as e:
-            logger.error(f"Ошибка загрузки сессий с диска: {e}")
+            logger.error(f"Error loading sessions from disk: {e}")
 
 
 session_manager = SessionManager()

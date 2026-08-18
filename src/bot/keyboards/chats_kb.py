@@ -1,12 +1,13 @@
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
 from src.engine.session_manager import UserSession
+from src.bot.locales import t
 
 
 def build_chats_keyboard(session: UserSession) -> InlineKeyboardMarkup:
     builder = InlineKeyboardBuilder()
+    lang = session.language
 
-    # Сортируем чаты по времени последнего обновления
     sorted_chats = sorted(
         session.chats.values(),
         key=lambda c: c.updated_at,
@@ -25,14 +26,13 @@ def build_chats_keyboard(session: UserSession) -> InlineKeyboardMarkup:
 
     builder.adjust(1)
 
-    # Кнопки управления ветками
     builder.row(
-        InlineKeyboardButton(text="➕ Новый чат", callback_data="chat_action:new"),
-        InlineKeyboardButton(text="✏️ Переименовать", callback_data="chat_action:rename")
+        InlineKeyboardButton(text=t("btn_new_chat", lang), callback_data="chat_action:new"),
+        InlineKeyboardButton(text=t("btn_rename_chat", lang), callback_data="chat_action:rename")
     )
     builder.row(
-        InlineKeyboardButton(text="🗑 Удалить", callback_data="chat_action:del"),
-        InlineKeyboardButton(text="❌ Закрыть", callback_data="chat_action:close")
+        InlineKeyboardButton(text=t("btn_delete_chat", lang), callback_data="chat_action:del"),
+        InlineKeyboardButton(text=t("btn_close", lang), callback_data="chat_action:close")
     )
 
     return builder.as_markup()

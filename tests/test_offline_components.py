@@ -1,4 +1,5 @@
 import unittest
+from src.bot.locales import t
 from src.bot.utils.formatter import (
     format_thought_block,
     format_tool_call_block,
@@ -11,16 +12,30 @@ from src.config import Settings
 class TestOfflineComponents(unittest.TestCase):
 
     def test_settings_allowed_ids(self):
-        s = Settings(ALLOWED_USER_IDS="111, 222, 333", BOT_TOKEN="fake_token")
+        s = Settings(ALLOWED_USER_IDS="111, 222, 333", BOT_TOKEN="fake_token", BOT_LANGUAGE="en")
         self.assertEqual(s.allowed_ids_set, {111, 222, 333})
+        self.assertEqual(s.BOT_LANGUAGE, "en")
+
+    def test_locales_resolution(self):
+        en_welcome = t("start_welcome", "en")
+        ru_welcome = t("start_welcome", "ru")
+        self.assertIn("Welcome to Antigravity", en_welcome)
+        self.assertIn("Добро пожаловать", ru_welcome)
+
+        # Fallback test
+        missing = t("non_existent_key", "en")
+        self.assertEqual(missing, "[non_existent_key]")
 
     def test_markdown_formatting_blocks(self):
-        thought_html = format_thought_block("Thinking about step 1")
-        self.assertIn("<blockquote expandable>", thought_html)
-        self.assertIn("Thinking about step 1", thought_html)
+        thought_en = format_thought_block("Thinking about step 1", lang="en")
+        self.assertIn("<blockquote expandable>", thought_en)
+        self.assertIn("Agent Thoughts:", thought_en)
 
-        tool_html = format_tool_call_block("run_command", {"command": "ls -la"})
-        self.assertIn("🛠️ <b>Вызов инструмента:</b> <code>run_command</code>", tool_html)
+        thought_ru = format_thought_block("Думаю о шаге 1", lang="ru")
+        self.assertIn("Мысли агента:", thought_ru)
+
+        tool_html = format_tool_call_block("run_command", {"command": "ls -la"}, lang="en")
+        self.assertIn("Tool Call:", tool_html)
         self.assertIn("ls -la", tool_html)
 
     def test_markdown_to_telegram_html(self):

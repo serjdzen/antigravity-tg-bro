@@ -19,6 +19,9 @@
 * ⚡ **In-Place Live Streaming**:
   * Real-time token streaming with 1.4s adaptive throttling to prevent Telegram API rate limits (FloodWait 429).
   * Native markdown-to-HTML parser with expandable thought blocks (`<blockquote expandable>`) and stylized tool execution traces.
+* 🌐 **Multi-Language Support (i18n)**:
+  * **English (`en`)** by default for global use, and **Russian (`ru`)** fully localized.
+  * Switch language instantly on-the-fly in the `/settings` menu with one tap, or configure `BOT_LANGUAGE=en` in `.env`.
 * 🎙️ **Voice-to-Prompt (Groq Whisper)**:
   * Near-instant voice message transcription (~300–500ms) powered by `whisper-large-v3-turbo` via Groq Cloud API.
   * Custom IT vocabulary biasing (`data/whisper_prompt.txt`) ensures technical terms like `Next.js`, `Docker`, `Astro`, and `amoCRM` transcribe accurately.
@@ -51,6 +54,7 @@ graph TD
         Session --> Formatter[📝 HTML Streamer & Parser]
         TG <--> Voice[🎙️ Groq Whisper Engine]
         TG <--> Uploads[📁 Uploads Manager]
+        TG <--> Locales[🌐 i18n Locales Module]
     end
 
     subgraph Dual-Engine Bridge
@@ -76,8 +80,8 @@ graph TD
 | `💬 /chats` | **Chat Branches** | Switch between dialog branches, create new threads, or rename active chats |
 | `📁 /project` | **Project Explorer** | Interactive filesystem browser for selecting active workspace folders |
 | `🧠 /model` | **Model Switcher** | Select active model (Gemini 3.7 Flash, 3.1 Pro, Claude) and thinking effort |
-| `⚙️ /settings` | **Settings Center** | Toggle security mode (Ask/Auto), switch engine (CLI/SDK), and clean upload cache |
-| `📊 /status` | **Session Status** | View active directory, current model, session ID, and storage consumption |
+| `⚙️ /settings` | **Settings Center** | Toggle security mode (Ask/Auto), switch engine (CLI/SDK), toggle language (EN/RU), clean uploads |
+| `📊 /status` | **Session Status** | View active directory, current model, session ID, language, and storage consumption |
 | `📥 /get <path>` | **File Downloader** | Download any file directly from your local machine to your phone |
 | `🛑 /stop` | **Emergency Halt** | Instantly terminates the running Antigravity process |
 | `❓ /help` | **Quick Guide** | Displays help manual and shortcut tips |
@@ -111,6 +115,7 @@ Edit `.env` with your settings:
 ```env
 BOT_TOKEN=1234567890:ABCdefGHIjklMNOpqrsTUVwxyz
 ALLOWED_USER_IDS=123456789
+BOT_LANGUAGE=en
 DEFAULT_PROJECTS_DIR=/path/to/your/projects
 GROQ_API_KEY=gsk_...
 ```
@@ -139,7 +144,7 @@ Install as an automated background service managed by macOS `launchd`:
 
 ## 📚 Documentation
 
-* 📖 **[DEPLOYMENT.md](DEPLOYMENT.md)** — Step-by-step deployment guide for humans (macOS, Linux systemd, Docker).
+* 📖 **[DEPLOYMENT.md](DEPLOYMENT.md)** — Step-by-step deployment guide for humans (macOS, Linux systemd, Docker, Language configuration).
 * 🤖 **[AGENTS.md](AGENTS.md)** — Machine-readable deployment & maintenance instructions for AI coding assistants.
 * 🏛️ **[ARCHITECTURE.md](ARCHITECTURE.md)** — Detailed technical architecture, token decoding, and concurrency model.
 * 🛡️ **[SECURITY.md](SECURITY.md)** — In-depth overview of the 2-tier security model and safe execution invariants.

@@ -12,6 +12,7 @@ from src.bot.keyboards.settings_kb import (
     build_system_settings_keyboard
 )
 from src.bot.utils.formatter import split_message
+from src.bot.locales import t
 
 logger = logging.getLogger(__name__)
 router = Router(name="settings_router")
@@ -19,49 +20,51 @@ router = Router(name="settings_router")
 
 def format_featured_models_text(
     current_model: str,
-    reasoning_effort: str
+    reasoning_effort: str,
+    lang: str = "en"
 ) -> str:
-    effort_names = {
-        "high": "Высокий (High 🧠)",
-        "medium": "Средний (Medium ⚡)",
-        "low": "Низкий (Low 🚀)",
-        "off": "Выключен (Off ⏱)"
-    }
+    if lang == "ru":
+        effort_names = {
+            "high": "Высокий (High 🧠)",
+            "medium": "Средний (Medium ⚡)",
+            "low": "Низкий (Low 🚀)",
+            "off": "Выключен (Off ⏱)"
+        }
+    else:
+        effort_names = {
+            "high": "High 🧠",
+            "medium": "Medium ⚡",
+            "low": "Low 🚀",
+            "off": "Off ⏱"
+        }
     effort_str = effort_names.get(reasoning_effort, reasoning_effort)
 
-    return (
-        f"🧠 <b>Выбор AI-модели & Уровня Размышлений:</b>\n\n"
-        f"🎯 <b>Активная модель:</b> <code>{current_model}</code>\n"
-        f"💭 <b>Thinking Effort:</b> <code>{effort_str}</code>\n\n"
-        f"⭐️ <b>Топ-модели (Google Gemini 3.x & Claude):</b>\n"
-        f"<i>Нажмите на нужную модель для немедленного переключения:</i>"
-    )
+    return t("featured_models_title", lang, model=current_model, effort=effort_str)
 
 
-def format_all_models_text(current_model: str, total_models: int) -> str:
-    return (
-        f"🧠 <b>Полный список моделей API ({total_models}):</b>\n\n"
-        f"🎯 <b>Активная модель:</b> <code>{current_model}</code>\n\n"
-        f"<i>Листайте страницы кнопками ниже:</i>"
-    )
+def format_all_models_text(current_model: str, total_models: int, lang: str = "en") -> str:
+    return t("all_models_title", lang, model=current_model, count=total_models)
 
 
 def format_system_settings_text(
     safety_approval: bool,
     engine_mode: str,
     uploads_count: int,
-    uploads_mb: float
+    uploads_mb: float,
+    lang: str = "en"
 ) -> str:
-    mode_label = "🟣 <b>Antigravity CLI</b> <i>(Подписка Google One AI Pro)</i>" if engine_mode == "cli" else "🟢 <b>Python SDK</b> <i>(API-ключ / Cloud)</i>"
-    safety_label = "🔒 <b>ВКЛЮЧЕНА (Ask)</b> — опасные команды блокируются и требуют подтверждения кнопкой." if safety_approval else "⚡ <b>ВЫКЛЮЧЕНА (Full Auto)</b> — все команды выполняются сразу без вопросов."
+    safety_desc = t("safety_ask_desc" if safety_approval else "safety_auto_desc", lang)
+    engine_desc = t("engine_cli_desc" if engine_mode == "cli" else "engine_sdk_desc", lang)
+    lang_name = "English 🇬🇧" if lang == "en" else "Русский 🇷🇺"
 
-    return (
-        f"⚙️ <b>Системные Настройки & Обслуживание:</b>\n\n"
-        f"🛡 <b>Режим безопасности:</b>\n{safety_label}\n\n"
-        f"⚙️ <b>Движок выполнения:</b>\n{mode_label}\n\n"
-        f"📁 <b>Временные загрузки (uploads):</b>\n"
-        f"• Файлов в очереди: <b>{uploads_count} шт.</b> ({uploads_mb:.1f} MB)\n\n"
-        f"<i>Используйте кнопки для управления параметрами:</i>"
+    return t(
+        "settings_title",
+        lang,
+        safety_desc=safety_desc,
+        engine_desc=engine_desc,
+        lang_name=lang_name,
+        uploads_count=uploads_count,
+        uploads_mb=uploads_mb
     )
 
 
@@ -70,11 +73,13 @@ async def cmd_model(message: types.Message):
     session = session_manager.get_session(message.from_user.id)
     kb = build_featured_models_keyboard(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
     text = format_featured_models_text(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -87,13 +92,15 @@ async def cmd_settings(message: types.Message):
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
         uploads_count=files_count,
-        uploads_mb=files_mb
+        uploads_mb=files_mb,
+        lang=session.language
     )
     text = format_system_settings_text(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
         uploads_count=files_count,
-        uploads_mb=files_mb
+        uploads_mb=files_mb,
+        lang=session.language
     )
     await message.answer(text, reply_markup=kb, parse_mode="HTML")
 
@@ -109,13 +116,15 @@ async def cb_toggle_safety(callback: types.CallbackQuery):
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
         uploads_count=files_count,
-        uploads_mb=files_mb
+        uploads_mb=files_mb,
+        lang=session.language
     )
     text = format_system_settings_text(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
         uploads_count=files_count,
-        uploads_mb=files_mb
+        uploads_mb=files_mb,
+        lang=session.language
     )
 
     try:
@@ -123,8 +132,39 @@ async def cb_toggle_safety(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    state_str = "ВКЛЮЧЕНА (Ask)" if session.safety_approval else "ВЫКЛЮЧЕНА (Full Auto)"
-    await callback.answer(f"Защита: {state_str}")
+    state_str = "ON (Ask)" if session.safety_approval else "OFF (Full Auto)"
+    await callback.answer(f"Security: {state_str}")
+
+
+@router.callback_query(F.data == "toggle_language")
+async def cb_toggle_language(callback: types.CallbackQuery):
+    session = session_manager.get_session(callback.from_user.id)
+    session.language = "ru" if session.language == "en" else "en"
+    session_manager.save_to_disk()
+
+    files_count, files_mb = get_uploads_stats()
+    kb = build_system_settings_keyboard(
+        safety_approval=session.safety_approval,
+        engine_mode=session.engine_mode,
+        uploads_count=files_count,
+        uploads_mb=files_mb,
+        lang=session.language
+    )
+    text = format_system_settings_text(
+        safety_approval=session.safety_approval,
+        engine_mode=session.engine_mode,
+        uploads_count=files_count,
+        uploads_mb=files_mb,
+        lang=session.language
+    )
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+
+    lang_notice = "Язык переключен на Русский 🇷🇺" if session.language == "ru" else "Language switched to English 🇬🇧"
+    await callback.answer(lang_notice, show_alert=False)
 
 
 @router.callback_query(F.data.startswith("toggle_engine:"))
@@ -139,13 +179,15 @@ async def cb_toggle_engine(callback: types.CallbackQuery):
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
         uploads_count=files_count,
-        uploads_mb=files_mb
+        uploads_mb=files_mb,
+        lang=session.language
     )
     text = format_system_settings_text(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
         uploads_count=files_count,
-        uploads_mb=files_mb
+        uploads_mb=files_mb,
+        lang=session.language
     )
 
     try:
@@ -153,8 +195,8 @@ async def cb_toggle_engine(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    mode_name = "Antigravity CLI (Google AI Pro)" if new_mode == "cli" else "Python SDK (API Key)"
-    await callback.answer(f"Движок: {mode_name}")
+    mode_name = "Antigravity CLI" if new_mode == "cli" else "Python SDK"
+    await callback.answer(f"Engine: {mode_name}")
 
 
 @router.callback_query(F.data == "clean_uploads")
@@ -167,13 +209,15 @@ async def cb_clean_uploads(callback: types.CallbackQuery):
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
         uploads_count=files_count,
-        uploads_mb=files_mb
+        uploads_mb=files_mb,
+        lang=session.language
     )
     text = format_system_settings_text(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
         uploads_count=files_count,
-        uploads_mb=files_mb
+        uploads_mb=files_mb,
+        lang=session.language
     )
 
     try:
@@ -181,7 +225,8 @@ async def cb_clean_uploads(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    await callback.answer(f"🧹 Удалено {deleted_count} временных файлов!", show_alert=True)
+    alert_msg = t("alert_uploads_cleaned", session.language, count=deleted_count)
+    await callback.answer(alert_msg, show_alert=True)
 
 
 @router.callback_query(F.data == "toggle_effort")
@@ -198,11 +243,13 @@ async def cb_toggle_effort(callback: types.CallbackQuery):
 
     kb = build_featured_models_keyboard(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
     text = format_featured_models_text(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
 
     try:
@@ -210,7 +257,7 @@ async def cb_toggle_effort(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    await callback.answer(f"Уровень размышлений: {next_effort.upper()}")
+    await callback.answer(f"Thinking Effort: {next_effort.upper()}")
 
 
 @router.callback_query(F.data.startswith("set_model:"))
@@ -225,11 +272,13 @@ async def cb_set_model(callback: types.CallbackQuery):
 
     kb = build_featured_models_keyboard(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
     text = format_featured_models_text(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
 
     try:
@@ -237,7 +286,7 @@ async def cb_set_model(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    await callback.answer(f"Модель: {model_id}")
+    await callback.answer(f"Model: {model_id}")
 
 
 @router.callback_query(F.data == "mod_view:featured")
@@ -245,11 +294,13 @@ async def cb_view_featured(callback: types.CallbackQuery):
     session = session_manager.get_session(callback.from_user.id)
     kb = build_featured_models_keyboard(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
     text = format_featured_models_text(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
 
     try:
@@ -264,9 +315,9 @@ async def cb_view_all(callback: types.CallbackQuery):
     session = session_manager.get_session(callback.from_user.id)
     page_num = int(callback.data.split(":")[2])
 
-    kb, page, total_pages = build_all_models_keyboard(session.current_model, page=page_num)
+    kb, page, total_pages = build_all_models_keyboard(session.current_model, page=page_num, lang=session.language)
     all_models = get_all_models()
-    text = format_all_models_text(session.current_model, len(all_models))
+    text = format_all_models_text(session.current_model, len(all_models), lang=session.language)
 
     try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -280,9 +331,9 @@ async def cb_mod_page(callback: types.CallbackQuery):
     session = session_manager.get_session(callback.from_user.id)
     page_num = int(callback.data.split(":")[1])
 
-    kb, page, total_pages = build_all_models_keyboard(session.current_model, page=page_num)
+    kb, page, total_pages = build_all_models_keyboard(session.current_model, page=page_num, lang=session.language)
     all_models = get_all_models()
-    text = format_all_models_text(session.current_model, len(all_models))
+    text = format_all_models_text(session.current_model, len(all_models), lang=session.language)
 
     try:
         await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
@@ -296,12 +347,14 @@ async def cb_mod_refresh(callback: types.CallbackQuery):
     session = session_manager.get_session(callback.from_user.id)
     kb = build_featured_models_keyboard(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
     all_models = get_all_models(force_refresh=True)
     text = format_featured_models_text(
         session.current_model,
-        session.reasoning_effort
+        session.reasoning_effort,
+        lang=session.language
     )
 
     try:
@@ -309,7 +362,8 @@ async def cb_mod_refresh(callback: types.CallbackQuery):
     except Exception:
         pass
 
-    await callback.answer("🔄 Список моделей обновлен из API!", show_alert=True)
+    notice = "Models catalog refreshed!" if session.language == "en" else "Список моделей обновлен из API!"
+    await callback.answer(f"🔄 {notice}", show_alert=True)
 
 
 @router.callback_query(F.data == "mod_noop")
@@ -320,18 +374,22 @@ async def cb_mod_noop(callback: types.CallbackQuery):
 @router.callback_query(F.data == "settings_close")
 async def cb_settings_close(callback: types.CallbackQuery):
     await callback.message.delete()
-    await callback.answer("Закрыто")
+    await callback.answer()
 
 
 @router.message(Command("mcp"))
 async def cmd_mcp(message: types.Message):
+    session = session_manager.get_session(message.from_user.id)
     summary = get_mcp_summary()
+    lang = session.language
 
     if not summary:
-        await message.answer("🔌 <b>Подключенные MCP-серверы:</b>\n\n<i>Серверы не найдены в конфигурации.</i>", parse_mode="HTML")
+        msg = "🔌 <b>Connected MCP Servers:</b>\n\n<i>No MCP servers configured.</i>" if lang == "en" else "🔌 <b>Подключенные MCP-серверы:</b>\n\n<i>Серверы не найдены в конфигурации.</i>"
+        await message.answer(msg, parse_mode="HTML")
         return
 
-    lines = [f"🔌 <b>Подключенные MCP-серверы ({len(summary)}):</b>\n"]
+    header = f"🔌 <b>Connected MCP Servers ({len(summary)}):</b>\n" if lang == "en" else f"🔌 <b>Подключенные MCP-серверы ({len(summary)}):</b>\n"
+    lines = [header]
     for idx, (name, details) in enumerate(summary.items(), 1):
         lines.append(f"<b>{idx}. {name}</b> ({details})")
 
@@ -345,12 +403,15 @@ async def cmd_mcp(message: types.Message):
 async def cmd_skills(message: types.Message):
     session = session_manager.get_session(message.from_user.id)
     skills = get_skills_summary(session.current_project_dir)
+    lang = session.language
 
     if not skills:
-        await message.answer("🧩 <b>Локальные скиллы:</b>\n\n<i>Скиллы не найдены.</i>", parse_mode="HTML")
+        msg = "🧩 <b>Local Skills:</b>\n\n<i>No skills found in workspace.</i>" if lang == "en" else "🧩 <b>Локальные скиллы:</b>\n\n<i>Скиллы не найдены.</i>"
+        await message.answer(msg, parse_mode="HTML")
         return
 
-    lines = [f"🧩 <b>Обнаруженные скиллы Antigravity ({len(skills)}):</b>\n"]
+    header = f"🧩 <b>Discovered Antigravity Skills ({len(skills)}):</b>\n" if lang == "en" else f"🧩 <b>Обнаруженные скиллы Antigravity ({len(skills)}):</b>\n"
+    lines = [header]
     for idx, (name, desc) in enumerate(sorted(skills.items()), 1):
         clean_desc = desc if len(desc) <= 90 else desc[:87] + "..."
         lines.append(f"<b>{idx}. <code>{name}</code></b> — {clean_desc}")

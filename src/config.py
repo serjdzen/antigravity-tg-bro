@@ -11,6 +11,7 @@ class Settings(BaseSettings):
     GROQ_API_KEY: str = ""
     DEFAULT_PROJECTS_DIR: str = str(Path.home() / "Documents" / "work")
     DEFAULT_MODEL: str = "gemini-3.1-flash-lite"
+    BOT_LANGUAGE: str = "en"  # "en" | "ru"
     MCP_CONFIG_PATH: str = str(Path.home() / ".gemini" / "config" / "mcp_config.json")
     SKILLS_DIR_PATH: str = str(Path.home() / ".gemini" / "config" / "skills")
 
@@ -36,6 +37,10 @@ settings = Settings()
 
 # Очищаем os.environ от переменных бота, чтобы дочерние MCP серверы
 # со строгим pydantic (extra='forbid') не падали при запуске
-for key in ["BOT_TOKEN", "ALLOWED_USER_IDS", "DEFAULT_PROJECTS_DIR", "DEFAULT_MODEL", "MCP_CONFIG_PATH", "SKILLS_DIR_PATH", "GROQ_API_KEY"]:
+for key in [
+    "BOT_TOKEN", "ALLOWED_USER_IDS", "DEFAULT_PROJECTS_DIR",
+    "DEFAULT_MODEL", "BOT_LANGUAGE", "MCP_CONFIG_PATH",
+    "SKILLS_DIR_PATH", "GROQ_API_KEY"
+]:
     if key in os.environ:
         del os.environ[key]

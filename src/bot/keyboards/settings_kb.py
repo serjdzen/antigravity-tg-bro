@@ -6,16 +6,18 @@ from src.engine.models_loader import (
     get_all_models,
     get_model_emoji
 )
+from src.bot.locales import t
 
 MODELS_PER_PAGE = 6
 
 
 def build_featured_models_keyboard(
     current_model: str,
-    reasoning_effort: str = "low"
+    reasoning_effort: str = "low",
+    lang: str = "en"
 ) -> InlineKeyboardMarkup:
     """
-    Клавиатура меню /model: только выбор модели и уровня размышлений (Thinking Effort).
+    Клавиатура меню /model: выбор модели и уровня размышлений (Thinking Effort).
     """
     builder = InlineKeyboardBuilder()
 
@@ -28,26 +30,35 @@ def build_featured_models_keyboard(
 
     builder.adjust(1)
 
-    # Лейблы для уровней размышлений
-    effort_labels = {
-        "high": "🧠 Размышления: Высокий (High)",
-        "medium": "⚡ Размышления: Средний (Medium)",
-        "low": "🚀 Размышления: Низкий (Low)",
-        "off": "⏱ Размышления: Выкл (Off)"
-    }
-    cur_effort_label = effort_labels.get(reasoning_effort, "🚀 Размышления: Low")
+    if lang == "ru":
+        effort_labels = {
+            "high": "🧠 Размышления: Высокий (High)",
+            "medium": "⚡ Размышления: Средний (Medium)",
+            "low": "🚀 Размышления: Низкий (Low)",
+            "off": "⏱ Размышления: Выкл (Off)"
+        }
+    else:
+        effort_labels = {
+            "high": "🧠 Thinking: High",
+            "medium": "⚡ Thinking: Medium",
+            "low": "🚀 Thinking: Low",
+            "off": "⏱ Thinking: Off"
+        }
+    cur_effort_label = effort_labels.get(reasoning_effort, f"🚀 Thinking: {reasoning_effort.title()}")
 
-    # Кнопка переключения уровня размышлений
     builder.row(
         InlineKeyboardButton(text=cur_effort_label, callback_data="toggle_effort")
     )
 
-    # Кнопки дополнительных списков моделей
+    all_models_label = "📂 All API Models" if lang == "en" else "📂 Все модели API"
+    refresh_label = t("btn_refresh", lang)
+    close_label = t("btn_close", lang)
+
     builder.row(
-        InlineKeyboardButton(text="📂 Все модели API", callback_data="mod_view:all:0"),
-        InlineKeyboardButton(text="🔄 Обновить", callback_data="mod_refresh")
+        InlineKeyboardButton(text=all_models_label, callback_data="mod_view:all:0"),
+        InlineKeyboardButton(text=refresh_label, callback_data="mod_refresh")
     )
-    builder.row(InlineKeyboardButton(text="❌ Закрыть", callback_data="settings_close"))
+    builder.row(InlineKeyboardButton(text=close_label, callback_data="settings_close"))
 
     return builder.as_markup()
 
@@ -55,7 +66,8 @@ def build_featured_models_keyboard(
 def build_all_models_keyboard(
     current_model: str,
     page: int = 0,
-    force_refresh: bool = False
+    force_refresh: bool = False,
+    lang: str = "en"
 ) -> Tuple[InlineKeyboardMarkup, int, int]:
     models = get_all_models(force_refresh=force_refresh)
     total_models = len(models)
@@ -79,24 +91,26 @@ def build_all_models_keyboard(
 
     builder.adjust(1)
 
-    # Пагинация
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"mod_page:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"mod_page:{page - 1}"))
     if total_pages > 1:
         nav_row.append(InlineKeyboardButton(text=f"📄 {page + 1}/{total_pages}", callback_data="mod_noop"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"mod_page:{page + 1}"))
+        nav_row.append(InlineKeyboardButton(text=t("btn_forward", lang), callback_data=f"mod_page:{page + 1}"))
 
     if nav_row:
         builder.row(*nav_row)
 
-    # Кнопка возврата к избранным
+    featured_label = "⭐️ Featured Models" if lang == "en" else "⭐️ Топ-флагманы"
+    refresh_label = t("btn_refresh", lang)
+    close_label = t("btn_close", lang)
+
     builder.row(
-        InlineKeyboardButton(text="⭐️ Топ-флагманы", callback_data="mod_view:featured"),
-        InlineKeyboardButton(text="🔄 Обновить", callback_data="mod_refresh")
+        InlineKeyboardButton(text=featured_label, callback_data="mod_view:featured"),
+        InlineKeyboardButton(text=refresh_label, callback_data="mod_refresh")
     )
-    builder.row(InlineKeyboardButton(text="❌ Закрыть", callback_data="settings_close"))
+    builder.row(InlineKeyboardButton(text=close_label, callback_data="settings_close"))
 
     return builder.as_markup(), page, total_pages
 
@@ -105,39 +119,45 @@ def build_system_settings_keyboard(
     safety_approval: bool,
     engine_mode: str,
     uploads_count: int,
-    uploads_mb: float
+    uploads_mb: float,
+    lang: str = "en"
 ) -> InlineKeyboardMarkup:
     """
-    Клавиатура меню /settings: системные настройки, безопасность, движок, очистка файлов.
+    Клавиатура меню /settings: системные настройки, безопасность, движок, язык, очистка файлов.
     """
     builder = InlineKeyboardBuilder()
 
-    # 1. Кнопка переключения безопасности (Safety)
-    safety_text = "🛡 Защита: ВКЛ (Ask) ✅" if safety_approval else "🛡 Защита: ВЫКЛ (Full Auto) ⚡"
+    # 1. Безопасность (Safety)
+    safety_text = t("btn_safety_on", lang) if safety_approval else t("btn_safety_off", lang)
     builder.row(
         InlineKeyboardButton(text=safety_text, callback_data="toggle_safety")
     )
 
-    # 2. Кнопка переключения движка (CLI vs SDK)
+    # 2. Движок (CLI vs SDK)
     if engine_mode == "cli":
-        engine_btn = InlineKeyboardButton(
-            text="🟣 Движок: CLI (Google AI Pro) ⚡",
-            callback_data="toggle_engine:sdk"
-        )
+        engine_text = t("btn_engine_cli", lang)
+        next_mode = "sdk"
     else:
-        engine_btn = InlineKeyboardButton(
-            text="🟢 Движок: SDK (API Key / $300) ☁️",
-            callback_data="toggle_engine:cli"
-        )
-    builder.row(engine_btn)
+        engine_text = t("btn_engine_sdk", lang)
+        next_mode = "cli"
 
-    # 3. Кнопка очистки временных файлов
-    clean_btn_text = f"🧹 Очистить uploads ({uploads_count} шт, {uploads_mb:.1f} MB)"
+    builder.row(
+        InlineKeyboardButton(text=engine_text, callback_data=f"toggle_engine:{next_mode}")
+    )
+
+    # 3. Переключение языка (Language)
+    lang_btn_text = "🌐 Language: English 🇬🇧" if lang == "en" else "🌐 Язык: Русский 🇷🇺"
+    builder.row(
+        InlineKeyboardButton(text=lang_btn_text, callback_data="toggle_language")
+    )
+
+    # 4. Очистка временных файлов
+    clean_btn_text = t("btn_clean_uploads", lang, count=uploads_count, mb=uploads_mb)
     builder.row(
         InlineKeyboardButton(text=clean_btn_text, callback_data="clean_uploads")
     )
 
-    # 4. Закрыть
-    builder.row(InlineKeyboardButton(text="❌ Закрыть", callback_data="settings_close"))
+    # 5. Закрыть
+    builder.row(InlineKeyboardButton(text=t("btn_close", lang), callback_data="settings_close"))
 
     return builder.as_markup()

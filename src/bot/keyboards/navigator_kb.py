@@ -3,6 +3,7 @@ from pathlib import Path
 from typing import List, Tuple
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton
 from aiogram.utils.keyboard import InlineKeyboardBuilder
+from src.bot.locales import t
 
 logger = logging.getLogger(__name__)
 
@@ -16,7 +17,6 @@ def get_subdirectories(path: Path) -> List[Path]:
         subdirs = []
         for entry in path.iterdir():
             try:
-                # Пропускаем скрытые папки и файлы
                 if entry.name.startswith("."):
                     continue
                 if entry.is_dir():
@@ -25,26 +25,25 @@ def get_subdirectories(path: Path) -> List[Path]:
                 continue
         return sorted(subdirs, key=lambda p: p.name.lower())
     except (PermissionError, OSError) as e:
-        logger.warning(f"Ошибка доступа к папке {path}: {e}")
+        logger.warning(f"Error accessing directory {path}: {e}")
         return []
 
 
 def build_navigator_keyboard(
     current_dir: Path,
-    page: int = 0
+    page: int = 0,
+    lang: str = "en"
 ) -> Tuple[InlineKeyboardMarkup, int, int]:
     builder = InlineKeyboardBuilder()
     subdirs = get_subdirectories(current_dir)
     total_items = len(subdirs)
     total_pages = max(1, (total_items + ITEMS_PER_PAGE - 1) // ITEMS_PER_PAGE)
 
-    # Ограничиваем страницу допустимым диапазоном
     page = max(0, min(page, total_pages - 1))
     start_idx = page * ITEMS_PER_PAGE
     end_idx = start_idx + ITEMS_PER_PAGE
     page_items = subdirs[start_idx:end_idx]
 
-    # Кнопки подпапок (по 2 в ряд для компактности на смартфоне)
     for idx, folder in enumerate(page_items):
         folder_name = folder.name
         if len(folder_name) > 24:
@@ -55,30 +54,27 @@ def build_navigator_keyboard(
         )
     builder.adjust(2)
 
-    # Навигационные кнопки: Пагинация
     nav_row = []
     if page > 0:
-        nav_row.append(InlineKeyboardButton(text="⬅️ Назад", callback_data=f"nav_page:{page - 1}"))
+        nav_row.append(InlineKeyboardButton(text=t("btn_back", lang), callback_data=f"nav_page:{page - 1}"))
     if total_pages > 1:
         nav_row.append(InlineKeyboardButton(text=f"📄 {page + 1}/{total_pages}", callback_data="nav_noop"))
     if page < total_pages - 1:
-        nav_row.append(InlineKeyboardButton(text="Вперед ➡️", callback_data=f"nav_page:{page + 1}"))
+        nav_row.append(InlineKeyboardButton(text=t("btn_forward", lang), callback_data=f"nav_page:{page + 1}"))
 
     if nav_row:
         builder.row(*nav_row)
 
-    # Кнопка «Вверх на уровень» (если мы не в корне системы)
     control_row = []
     if current_dir.parent != current_dir and current_dir != Path("/"):
-        control_row.append(InlineKeyboardButton(text="⬆️ На уровень выше", callback_data="nav_up"))
+        control_row.append(InlineKeyboardButton(text=t("btn_up_dir", lang), callback_data="nav_up"))
 
     if control_row:
         builder.row(*control_row)
 
-    # Главные кнопки действий
     builder.row(
-        InlineKeyboardButton(text="✅ Выбрать эту папку", callback_data="nav_choose"),
-        InlineKeyboardButton(text="❌ Закрыть", callback_data="nav_close")
+        InlineKeyboardButton(text=t("btn_choose_dir", lang), callback_data="nav_choose"),
+        InlineKeyboardButton(text=t("btn_close", lang), callback_data="nav_close")
     )
 
     return builder.as_markup(), page, total_pages

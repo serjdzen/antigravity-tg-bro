@@ -1,6 +1,7 @@
 import html
 import re
 from typing import Any, Dict, List
+from src.bot.locales import t
 
 
 def escape_html(text: str) -> str:
@@ -9,12 +10,12 @@ def escape_html(text: str) -> str:
 
 def format_markdown_to_telegram_html(text: str) -> str:
     """
-    Преобразует Markdown (заголовки, жирный, курсив, списки, ссылки, код) в валидный Telegram HTML.
+    Converts standard Markdown (headers, bold, italic, lists, links, code) into valid Telegram HTML.
     """
     if not text:
         return ""
 
-    # 1. Сохраняем мультистрочные блоки кода ```lang\ncode\n```
+    # 1. Multi-line code blocks ```lang\ncode\n```
     code_blocks = []
     def save_code_block(match):
         code = match.group(2)
@@ -26,7 +27,7 @@ def format_markdown_to_telegram_html(text: str) -> str:
     pattern_multiline = r"```([a-zA-Z0-9_-]*)\n?([\s\S]*?)```"
     text = re.sub(pattern_multiline, save_code_block, text)
 
-    # 2. Сохраняем инлайн-код `code`
+    # 2. Inline code `code`
     inline_codes = []
     def save_inline_code(match):
         code = match.group(1)
@@ -37,34 +38,27 @@ def format_markdown_to_telegram_html(text: str) -> str:
 
     text = re.sub(r"`([^`\n]+)`", save_inline_code, text)
 
-    # 3. Экранируем весь остальной текст для безопасности HTML
+    # 3. Escape all remaining HTML entities
     text = html.escape(text, quote=False)
 
-    # 4. Преобразуем заголовки Markdown (#, ##, ###, ####) -> <b>Заголовок</b>
+    # 4. Markdown headers (#, ##, ###) -> <b>Header</b>
     text = re.sub(r"^(?:#{1,6})\s+(.+)$", r"<b>\1</b>", text, flags=re.MULTILINE)
 
-    # 5. Преобразуем файловые ссылки [name](file://...) -> <b>name</b>
+    # 5. File & Web links
     text = re.sub(r"\[([^\]]+)\]\(file://[^\)]+\)", r"<b>\1</b>", text)
-    # Преобразуем веб-ссылки [name](https://...) -> <a href="...">name</a>
     text = re.sub(r"\[([^\]]+)\]\((https?://[^\)]+)\)", r'<a href="\2">\1</a>', text)
 
-    # 6. Жирный текст **text** -> <b>text</b>
+    # 6. Formatting (bold, strikethrough, italic)
     text = re.sub(r"\*\*([^\*\n]+)\*\*", r"<b>\1</b>", text)
-
-    # 7. Зачеркнутый текст ~~text~~ -> <s>text</s>
     text = re.sub(r"~~([^~\n]+)~~", r"<s>\1</s>", text)
-
-    # 8. Курсив *text* или _text_ -> <i>text</i>
     text = re.sub(r"(?<!\w)\*([^\*\n]+)\*(?!\w)", r"<i>\1</i>", text)
     text = re.sub(r"(?<!\w)_([^_\n]+)_(?!\w)", r"<i>\1</i>", text)
 
-    # 9. Маркированные списки * или - в начале строки -> •
+    # 7. Lists & Separators
     text = re.sub(r"^[*-]\s+", r"• ", text, flags=re.MULTILINE)
-
-    # 10. Разделители --- или *** -> ───────────────
     text = re.sub(r"^(-{3,}|\*{3,})$", r"───────────────", text, flags=re.MULTILINE)
 
-    # 11. Восстанавливаем блоки кода
+    # 8. Restore code placeholders
     for idx, block in enumerate(code_blocks):
         text = text.replace(f"__CODE_BLOCK_{idx}__", block)
     for idx, incode in enumerate(inline_codes):
@@ -73,12 +67,13 @@ def format_markdown_to_telegram_html(text: str) -> str:
     return text
 
 
-def format_thought_block(thought: str) -> str:
+def format_thought_block(thought: str, lang: str = "en") -> str:
     clean_thought = escape_html(thought.strip())
-    return f'<blockquote expandable>💭 <b>Мысли агента:</b>\n<i>{clean_thought}</i></blockquote>'
+    header = t("thought_block_header", lang)
+    return f'<blockquote expandable>{header}\n<i>{clean_thought}</i></blockquote>'
 
 
-def format_tool_call_block(tool_name: str, args: Dict[str, Any]) -> str:
+def format_tool_call_block(tool_name: str, args: Dict[str, Any], lang: str = "en") -> str:
     escaped_name = escape_html(tool_name)
     args_str = ""
     if args:
@@ -89,7 +84,8 @@ def format_tool_call_block(tool_name: str, args: Dict[str, Any]) -> str:
         except Exception:
             args_str = f"\n<code>{escape_html(str(args))}</code>"
 
-    return f'<blockquote expandable>🛠️ <b>Вызов инструмента:</b> <code>{escaped_name}</code>{args_str}</blockquote>'
+    header = t("tool_call_header", lang)
+    return f'<blockquote expandable>{header} <code>{escaped_name}</code>{args_str}</blockquote>'
 
 
 def split_message(text: str, max_chars: int = 4000) -> List[str]:

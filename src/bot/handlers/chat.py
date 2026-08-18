@@ -13,11 +13,12 @@ from src.engine.voice_transcriber import voice_transcriber
 from src.engine.uploads_manager import ensure_uploads_dir
 from src.bot.utils.formatter import format_thought_block, format_tool_call_block
 from src.bot.utils.streamer import LiveStreamer
+from src.bot.locales import t
 
 logger = logging.getLogger(__name__)
 router = Router(name="chat_router")
 
-# Текстовые расширения, требующие UTF-8 BOM для iOS QuickLook
+# Text extensions requiring UTF-8 BOM for iOS QuickLook preview
 TEXT_FILE_EXTENSIONS = {
     ".md", ".mdx", ".txt", ".csv", ".json", ".yaml", ".yml",
     ".py", ".js", ".ts", ".tsx", ".jsx", ".astro", ".html",
@@ -27,9 +28,8 @@ TEXT_FILE_EXTENSIONS = {
 
 def prepare_attachment_file(file_path: Path):
     """
-    Подготавливает файл для отправки в Telegram.
-    Для текстовых форматов (Markdown, код, txt) добавляет UTF-8 BOM,
-    чтобы iOS QuickLook на iPhone открывал кириллицу без кракозябр (mojibake).
+    Prepares a file for Telegram delivery.
+    Adds UTF-8 BOM for plain text files to ensure iOS QuickLook displays Cyrillic & UTF-8 correctly.
     """
     ext = file_path.suffix.lower()
     if ext in TEXT_FILE_EXTENSIONS:
@@ -39,23 +39,21 @@ def prepare_attachment_file(file_path: Path):
                 raw_bytes = b"\xef\xbb\xbf" + raw_bytes
             return BufferedInputFile(file=raw_bytes, filename=file_path.name)
         except Exception as e:
-            logger.warning(f"Не удалось подготовить текстовый файл {file_path} с BOM: {e}")
+            logger.warning(f"Could not add BOM to {file_path}: {e}")
     return FSInputFile(path=str(file_path), filename=file_path.name)
 
 
-# Хранилище точного текста последнего запроса пользователя для разового переопределения
 _LAST_USER_PROMPT = {}
 
 
 def extract_attachment_paths(text: str) -> List[Path]:
     """
-    Находит в выводе агента пути к файлам и изображениям, которые агент хотел отправить:
-    - Markdown-картинки: ![alt](/path/to/file)
-    - Ссылки на локальные файлы: [text](file:///path/to/file)
+    Extracts local file and image paths referenced in the agent's output:
+    - Markdown images: ![alt](/path/to/file)
+    - Local file links: [text](file:///path/to/file)
     """
     found_paths = []
-    
-    # 1. Markdown изображения: ![...](path)
+
     img_matches = re.findall(r'!\[.*?\]\(([^)]+)\)', text)
     for match in img_matches:
         clean_str = unquote(match.replace("file://", "").strip())
@@ -63,7 +61,6 @@ def extract_attachment_paths(text: str) -> List[Path]:
         if p.is_file() and p.exists() and p not in found_paths:
             found_paths.append(p)
 
-    # 2. Файловые ссылки: [файл](file:///path)
     file_matches = re.findall(r'\[.*?\]\(file://([^)]+)\)', text)
     for match in file_matches:
         clean_str = unquote(match.strip())
@@ -84,19 +81,23 @@ async def _execute_prompt(
 ):
     session = session_manager.get_session(user_id)
     active_chat = session.get_active_chat()
+    lang = session.language
 
     if session.lock.locked():
+        busy_msg = (
+            "⏳ <b>Agent is currently executing a previous task.</b>\nPlease wait for completion."
+            if lang == "en" else
+            "⏳ <b>Агент уже выполняет предыдущую задачу.</b>\nПожалуйста, дождитесь завершения."
+        )
         await bot.send_message(
             chat_id=chat_id,
-            text="⏳ <b>Агент уже выполняет предыдущую задачу.</b>\nПожалуйста, дождитесь завершения.",
+            text=busy_msg,
             reply_to_message_id=reply_to_message_id,
             parse_mode="HTML"
         )
         return
 
     _LAST_USER_PROMPT[user_id] = prompt_text
-
-    # Если в /settings выключена защита (safety_approval=False), то force_override автоматически активен
     effective_override = force_override or (not session.safety_approval)
 
     async with session.lock:
@@ -131,35 +132,37 @@ async def _execute_prompt(
                         session_manager.save_to_disk()
                 elif event.event_type == "thought":
                     if event.content:
-                        thought_blocks.append(format_thought_block(str(event.content)))
+                        thought_blocks.append(format_thought_block(str(event.content), lang=lang))
                 elif event.event_type == "tool_call":
                     tool_info = event.content or {}
                     tool_name = tool_info.get("name", "tool")
                     tool_args = tool_info.get("args", {})
-                    tool_blocks.append(format_tool_call_block(tool_name, tool_args))
+                    tool_blocks.append(format_tool_call_block(tool_name, tool_args, lang=lang))
                 elif event.event_type == "token":
                     if event.content:
                         full_response_text.append(str(event.content))
                         await streamer.update_text(str(event.content))
                 elif event.event_type == "error":
-                    thought_blocks.append(f"⚠️ <b>Ошибка выполнения:</b>\n<code>{event.content}</code>")
+                    err_lbl = "Execution error" if lang == "en" else "Ошибка выполнения"
+                    thought_blocks.append(f"⚠️ <b>{err_lbl}:</b>\n<code>{event.content}</code>")
 
         except Exception as e:
-            logger.error(f"Необработанная ошибка в диалоге: {e}", exc_info=True)
-            thought_blocks.append(f"❌ <b>Критическая ошибка агента:</b>\n<code>{str(e)}</code>")
+            logger.error(f"Unhandled error in chat loop: {e}", exc_info=True)
+            crit_lbl = "Critical agent error" if lang == "en" else "Критическая ошибка агента"
+            thought_blocks.append(f"❌ <b>{crit_lbl}:</b>\n<code>{str(e)}</code>")
 
         finally:
             extra_blocks = thought_blocks + tool_blocks
             complete_output = "".join(full_response_text)
 
-            # Проверяем, была ли команда заблокирована политикой deny
             kb = None
             if session.safety_approval and not force_override:
                 if ("Permission denied" in complete_output or "deny rule" in complete_output or "заблокирован" in complete_output.lower()):
+                    btn_text = t("btn_force_override", lang)
                     kb = InlineKeyboardMarkup(inline_keyboard=[
                         [
                             InlineKeyboardButton(
-                                text="⚡ Разрешить разово (Force Override)",
+                                text=btn_text,
                                 callback_data="force_execute"
                             )
                         ]
@@ -168,13 +171,13 @@ async def _execute_prompt(
             await streamer.finalize(extra_blocks=extra_blocks, reply_markup=kb)
             session_manager.save_to_disk()
 
-            # 📤 АВТОМАТИЧЕСКАЯ ОТПРАВКА ФАЙЛОВ / КАРТИНОК ИЗ ОТВЕТА АГЕНТА:
+            # Automatic delivery of images and files generated by the agent
             attachments = extract_attachment_paths(complete_output)
             for file_path in attachments:
                 try:
                     file_size_mb = file_path.stat().st_size / (1024 * 1024)
                     if file_size_mb > 50:
-                        logger.info(f"Файл {file_path.name} слишком большой ({file_size_mb:.1f} MB), пропуск.")
+                        logger.info(f"File {file_path.name} too large ({file_size_mb:.1f} MB), skipping.")
                         continue
 
                     ext = file_path.suffix.lower()
@@ -194,9 +197,9 @@ async def _execute_prompt(
                             caption=f"📄 <b>{file_path.name}</b>",
                             parse_mode="HTML"
                         )
-                    logger.info(f"📤 Автоматически отправлен файл пользователю: {file_path.name}")
+                    logger.info(f"Automatically delivered attachment: {file_path.name}")
                 except Exception as e:
-                    logger.warning(f"Не удалось автоматически отправить файл {file_path}: {e}")
+                    logger.warning(f"Failed to auto-send attachment {file_path}: {e}")
 
 
 @router.message(F.text & ~F.text.startswith("/"))
@@ -215,12 +218,15 @@ async def handle_chat_message(message: types.Message, bot: Bot):
 async def handle_force_execute_callback(callback: types.CallbackQuery, bot: Bot):
     user_id = callback.from_user.id
     last_prompt = _LAST_USER_PROMPT.get(user_id)
+    session = session_manager.get_session(user_id)
 
     if not last_prompt:
-        await callback.answer("⚠️ Не удалось найти предыдущий запрос.", show_alert=True)
+        err_msg = "Could not find previous prompt." if session.language == "en" else "Не удалось найти предыдущий запрос."
+        await callback.answer(f"⚠️ {err_msg}", show_alert=True)
         return
 
-    await callback.answer("⚡ Запуск с разовым снятием защиты (CLI --dangerously-skip-permissions)...")
+    notify = "Executing with one-time force override..." if session.language == "en" else "Запуск с разовым снятием защиты..."
+    await callback.answer(f"⚡ {notify}")
     if callback.message:
         await _execute_prompt(
             chat_id=callback.message.chat.id,
@@ -235,13 +241,16 @@ async def handle_force_execute_callback(callback: types.CallbackQuery, bot: Bot)
 @router.message(F.text == "/force")
 async def handle_force_command(message: types.Message, bot: Bot):
     user_id = message.from_user.id
+    session = session_manager.get_session(user_id)
     last_prompt = _LAST_USER_PROMPT.get(user_id)
 
     if not last_prompt:
-        await message.reply("⚠️ Нет предыдущего запроса для повторного выполнения с пропуском защиты.")
+        no_prev = "No previous prompt found for force retry." if session.language == "en" else "Нет предыдущего запроса для повторного выполнения с пропуском защиты."
+        await message.reply(f"⚠️ {no_prev}")
         return
 
-    await message.reply("⚡ <b>Повторный запуск с разовым снятием защиты...</b>", parse_mode="HTML")
+    retry_notice = "<b>Rerunning with one-time force override...</b>" if session.language == "en" else "<b>Повторный запуск с разовым снятием защиты...</b>"
+    await message.reply(f"⚡ {retry_notice}", parse_mode="HTML")
     await _execute_prompt(
         chat_id=message.chat.id,
         user_id=user_id,
@@ -254,40 +263,39 @@ async def handle_force_command(message: types.Message, bot: Bot):
 
 @router.message(F.text == "/stop")
 async def handle_stop_command(message: types.Message, bot: Bot):
-    """
-    Команда /stop:
-    - Принудительно прерывает выполнение активной задачи агента.
-    """
     user_id = message.from_user.id
+    session = session_manager.get_session(user_id)
     was_cancelled = antigravity_bridge.cancel_active_task(user_id)
 
     if was_cancelled:
-        await message.reply("⏹ <b>Выполнение задачи принудительно остановлено.</b>", parse_mode="HTML")
+        await message.reply(t("task_stopped", session.language), parse_mode="HTML")
     else:
-        await message.reply("ℹ️ В данный момент нет активных задач для остановки.", parse_mode="HTML")
+        await message.reply(t("task_nothing_to_stop", session.language), parse_mode="HTML")
 
 
 @router.message(F.voice | F.audio)
 async def handle_voice_message(message: types.Message, bot: Bot):
-    """
-    Обработчик голосовых сообщений:
-    - Загружает аудиофайл .ogg из Telegram.
-    - Передает в Groq Whisper Large v3 Turbo для мгновенной транскрибации.
-    - Направляет распознанный текст напрямую в Antigravity CLI.
-    """
+    session = session_manager.get_session(message.from_user.id)
+    lang = session.language
+
     if not voice_transcriber.is_configured:
-        await message.reply(
+        notice = (
+            "🎙️ <b>Voice Transcription Setup</b>\n\n"
+            "⚠️ To enable instant voice transcription via <b>Groq Whisper Large v3 Turbo</b>, "
+            "set your <code>GROQ_API_KEY</code> in the project's <code>.env</code> file.\n\n"
+            "🔑 Obtain a free API key: <a href='https://console.groq.com/keys'>console.groq.com/keys</a>"
+            if lang == "en" else
             "🎙️ <b>Распознавание голосовых сообщений</b>\n\n"
             "⚠️ Для мгновенной расшифровки через <b>Groq Whisper Large v3 Turbo</b>, "
             "укажите ваш <code>GROQ_API_KEY</code> в файле <code>.env</code> проекта.\n\n"
-            "🔑 Получить бесплатный ключ: <a href='https://console.groq.com/keys'>console.groq.com/keys</a>",
-            parse_mode="HTML",
-            disable_web_page_preview=True
+            "🔑 Получить бесплатный ключ: <a href='https://console.groq.com/keys'>console.groq.com/keys</a>"
         )
+        await message.reply(notice, parse_mode="HTML", disable_web_page_preview=True)
         return
 
     file_id = message.voice.file_id if message.voice else message.audio.file_id
-    status_msg = await message.reply("🎙️ <i>Слушаю и расшифровываю голосовое сообщение...</i>", parse_mode="HTML")
+    status_text = t("voice_processing", lang)
+    status_msg = await message.reply(status_text, parse_mode="HTML")
 
     try:
         file_io = io.BytesIO()
@@ -297,16 +305,15 @@ async def handle_voice_message(message: types.Message, bot: Bot):
         transcribed_text = await voice_transcriber.transcribe_audio_bytes(audio_bytes)
 
         if not transcribed_text:
-            await status_msg.edit_text("⚠️ Не удалось разобрать речь в аудиосообщении. Попробуйте записать ещё раз.")
+            err_text = "Could not parse audio speech. Please record again." if lang == "en" else "Не удалось разобрать речь в аудиосообщении. Попробуйте записать ещё раз."
+            await status_msg.edit_text(f"⚠️ {err_text}")
             return
 
-        # Удаляем временное статусное сообщение перед запуском генерации
         try:
             await bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
         except Exception:
             pass
 
-        # Передаем транскрибированный текст в обработчик задач
         await _execute_prompt(
             chat_id=message.chat.id,
             user_id=message.from_user.id,
@@ -317,21 +324,17 @@ async def handle_voice_message(message: types.Message, bot: Bot):
         )
 
     except Exception as e:
-        logger.error(f"Ошибка обработки голосового сообщения: {e}", exc_info=True)
+        logger.error(f"Voice transcription error: {e}", exc_info=True)
+        err_msg = t("voice_error", lang, error=str(e))
         try:
-            await status_msg.edit_text(f"❌ <b>Ошибка распознавания речи:</b>\n<code>{str(e)}</code>", parse_mode="HTML")
+            await status_msg.edit_text(err_msg, parse_mode="HTML")
         except Exception:
-            await message.reply(f"❌ <b>Ошибка распознавания речи:</b>\n<code>{str(e)}</code>", parse_mode="HTML")
+            await message.reply(err_msg, parse_mode="HTML")
 
 
 @router.message(F.photo)
 async def handle_photo_message(message: types.Message, bot: Bot):
-    """
-    Обработчик фото и скриншотов:
-    - Сохраняет фото в изолированную папку data/uploads/.
-    - Передает абсолютный путь к фото мультимодальной модели Gemini.
-    """
-    photo = message.photo[-1]  # Берем максимальное разрешение
+    photo = message.photo[-1]
     ts = time.strftime("%Y%m%d_%H%M%S")
     uploads_dir = ensure_uploads_dir()
     file_path = uploads_dir / f"photo_{ts}.jpg"
@@ -339,7 +342,7 @@ async def handle_photo_message(message: types.Message, bot: Bot):
     await bot.download(photo, destination=file_path)
 
     caption = message.caption or ""
-    prompt_text = f"Пользователь прикрепил изображение: [photo_{ts}.jpg](file://{file_path.resolve()})\n\n{caption}".strip()
+    prompt_text = f"User attached image: [photo_{ts}.jpg](file://{file_path.resolve()})\n\n{caption}".strip()
 
     await _execute_prompt(
         chat_id=message.chat.id,
@@ -353,11 +356,6 @@ async def handle_photo_message(message: types.Message, bot: Bot):
 
 @router.message(F.document)
 async def handle_document_message(message: types.Message, bot: Bot):
-    """
-    Обработчик прикрепленных файлов и документов:
-    - Сохраняет файл в data/uploads/.
-    - Передает путь модели.
-    """
     doc = message.document
     ts = time.strftime("%Y%m%d_%H%M%S")
     safe_name = "".join(c for c in (doc.file_name or "file") if c.isalnum() or c in "._-")
@@ -367,7 +365,7 @@ async def handle_document_message(message: types.Message, bot: Bot):
     await bot.download(doc, destination=file_path)
 
     caption = message.caption or ""
-    prompt_text = f"Пользователь прикрепил документ: [{doc.file_name}](file://{file_path.resolve()})\n\n{caption}".strip()
+    prompt_text = f"User attached document: [{doc.file_name}](file://{file_path.resolve()})\n\n{caption}".strip()
 
     await _execute_prompt(
         chat_id=message.chat.id,
@@ -381,13 +379,9 @@ async def handle_document_message(message: types.Message, bot: Bot):
 
 @router.message(F.text.startswith("/get ") | F.text.startswith("/download "))
 async def handle_get_file_command(message: types.Message, bot: Bot):
-    """
-    Команда /get <путь_к_файлу>:
-    - Находит файл в текущем проекте на Mac.
-    - Отправляет реальный файл документом в Telegram.
-    """
     raw_path = message.text.split(" ", 1)[1].strip()
     session = session_manager.get_session(message.from_user.id)
+    lang = session.language
     project_dir = session.current_project_dir
 
     target_path = Path(raw_path)
@@ -395,16 +389,18 @@ async def handle_get_file_command(message: types.Message, bot: Bot):
         target_path = project_dir / target_path
 
     if not target_path.exists():
+        not_found = t("get_file_not_found", lang, path=str(target_path))
+        proj_label = "Active Project" if lang == "en" else "Текущий проект"
         await message.reply(
-            f"❌ <b>Файл не найден:</b> <code>{target_path}</code>\n\n"
-            f"📁 Текущий проект: <code>{project_dir}</code>",
+            f"{not_found}\n\n📁 {proj_label}: <code>{project_dir}</code>",
             parse_mode="HTML"
         )
         return
 
     if target_path.is_dir():
+        is_dir_msg = "is a directory, not a file. Specify a specific file or compress it." if lang == "en" else "это папка, а не файл. Укажите конкретный файл или заархивируйте папку."
         await message.reply(
-            f"⚠️ <code>{target_path.name}</code> — это папка, а не файл. Укажите конкретный файл или заархивируйте папку.",
+            f"⚠️ <code>{target_path.name}</code> — {is_dir_msg}",
             parse_mode="HTML"
         )
         return
@@ -412,20 +408,22 @@ async def handle_get_file_command(message: types.Message, bot: Bot):
     file_size_mb = target_path.stat().st_size / (1024 * 1024)
     if file_size_mb > 50:
         await message.reply(
-            f"⚠️ Файл слишком большой для отправки через Telegram ({file_size_mb:.1f} MB > 50 MB лимит Telegram).",
+            t("get_file_too_large", lang, size_mb=file_size_mb),
             parse_mode="HTML"
         )
         return
 
-    status_msg = await message.reply(f"📤 <i>Отправляю файл {target_path.name} ({file_size_mb:.2f} MB)...</i>", parse_mode="HTML")
+    sending_label = f"Sending {target_path.name} ({file_size_mb:.2f} MB)..." if lang == "en" else f"Отправляю файл {target_path.name} ({file_size_mb:.2f} MB)..."
+    status_msg = await message.reply(f"📤 <i>{sending_label}</i>", parse_mode="HTML")
     try:
         ext = target_path.suffix.lower()
+        file_caption = f"Project File: <code>{target_path.name}</code>" if lang == "en" else f"Файл из проекта: <code>{target_path.name}</code>"
         if ext in [".png", ".jpg", ".jpeg", ".webp", ".gif"]:
             input_file = FSInputFile(path=str(target_path), filename=target_path.name)
             await bot.send_photo(
                 chat_id=message.chat.id,
                 photo=input_file,
-                caption=f"🖼 <b>Файл из проекта:</b> <code>{target_path.name}</code>",
+                caption=f"🖼 <b>{file_caption}</b>",
                 parse_mode="HTML"
             )
         else:
@@ -433,10 +431,11 @@ async def handle_get_file_command(message: types.Message, bot: Bot):
             await bot.send_document(
                 chat_id=message.chat.id,
                 document=input_file,
-                caption=f"📄 <b>Файл из проекта:</b> <code>{target_path.name}</code>",
+                caption=f"📄 <b>{file_caption}</b>",
                 parse_mode="HTML"
             )
         await bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
     except Exception as e:
-        logger.error(f"Ошибка отправки файла {target_path}: {e}", exc_info=True)
-        await status_msg.edit_text(f"❌ <b>Ошибка отправки файла:</b>\n<code>{str(e)}</code>", parse_mode="HTML")
+        logger.error(f"Error sending file {target_path}: {e}", exc_info=True)
+        err_msg = f"Failed to send file: {e}" if lang == "en" else f"Ошибка отправки файла: {e}"
+        await status_msg.edit_text(f"❌ <b>{err_msg}</b>", parse_mode="HTML")

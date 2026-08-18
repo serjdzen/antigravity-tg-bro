@@ -17,6 +17,23 @@ Before starting, ensure you have:
 
 ---
 
+## 🌐 Language & Localization Configuration
+
+Antigravity Telegram Bot includes a built-in i18n localization engine (`src/bot/locales.py`):
+
+1. **Default Global Language**:
+   Set `BOT_LANGUAGE` in your `.env` file:
+   ```env
+   BOT_LANGUAGE=en    # English (Default)
+   # BOT_LANGUAGE=ru  # Russian
+   ```
+2. **Runtime In-Bot Switching**:
+   Users can switch between English and Russian at any time via the `/settings` menu by tapping the **`🌐 Language`** button. The preference is persisted across restarts in `data/sessions.json`.
+3. **Adding New Languages**:
+   Translations are organized as simple key-value dictionaries in `src/bot/locales.py`. To add another language (e.g. Spanish, German, Chinese), simply add the language code to the message mappings.
+
+---
+
 ## 🛠️ Method 1: macOS Background Daemon (Recommended for Mac)
 
 Use the built-in `service.sh` script to install the bot as a persistent macOS `LaunchAgent`. The script automatically configures dynamic paths and creates a named binary alias.
