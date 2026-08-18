@@ -1,0 +1,52 @@
+# Byte-compiled / optimized / DLL files
+__pycache__/
+*.py[cod]
+*$py.class
+*.pyc
+
+# Virtual Environments
+.venv/
+venv/
+ENV/
+env/
+
+# Environment and Secret configuration files
+.env
+.bot.env
+.env.*
+!.env.example
+*.local
+
+# Runtime Data and Sessions (Contains user session history & private data)
+data/sessions.json
+data/uploads/*
+!data/uploads/.gitkeep
+!data/whisper_prompt.txt
+
+# Log files and directories
+logs/*
+!logs/.gitkeep
+*.log
+
+# System daemons and machine-specific LaunchAgents
+scripts/com.antigravity.tgbot.plist
+*.plist
+
+# Temporary, scratch & testing artifacts
+*.tmp
+.pytest_cache/
+.coverage
+htmlcov/
+
+# IDE & OS metadata
+.DS_Store
+.DS_Store?
+._*
+.Spotlight-V100
+.Trashes
+ehthumbs.db
+Thumbs.db
+.idea/
+.vscode/
+*.swp
+*.swo

@@ -1,0 +1,1 @@
+Antigravity, amoCRM, n8n, Astro, TypeScript, Next.js, React, Tailwind, Docker, Python, Git, Supabase, Yandex, Wordstat, Beget, SSH, Playwright, API, JSON, Postman, Vite, Vercel, Telegram

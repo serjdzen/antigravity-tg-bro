@@ -1,0 +1,42 @@
+[build-system]
+requires = ["setuptools>=61.0"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "antigravity-telegram"
+version = "1.0.0"
+description = "Mobile Telegram Interface for Google Antigravity local environments"
+readme = "README.md"
+requires-python = ">=3.10"
+license = { text = "MIT" }
+authors = [
+    { name = "serjdzen" }
+]
+keywords = [
+    "antigravity",
+    "google-antigravity",
+    "gemini",
+    "telegram-bot",
+    "aiogram",
+    "groq",
+    "whisper",
+    "agentic-coding"
+]
+dependencies = [
+    "aiogram>=3.15.0",
+    "google-antigravity>=0.1.12",
+    "pydantic-settings>=2.5.0",
+    "python-dotenv>=1.0.0",
+    "aiofiles>=23.2.1",
+    "aiohttp>=3.9.0",
+]
+
+[project.optional-dependencies]
+dev = [
+    "pytest>=8.0.0",
+    "pytest-asyncio>=0.23.0",
+]
+
+[tool.pytest.ini_options]
+asyncio_mode = "auto"
+testpaths = ["tests"]

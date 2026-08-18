@@ -1,0 +1,41 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+<dict>
+    <key>Label</key>
+    <string>com.antigravity.tgbot</string>
+
+    <key>ProgramArguments</key>
+    <array>
+        <string>${HOME}/.local/bin/antigravity-tg-daemon</string>
+        <string>${PROJECT_DIR}/main.py</string>
+    </array>
+
+    <key>WorkingDirectory</key>
+    <string>${PROJECT_DIR}</string>
+
+    <key>RunAtLoad</key>
+    <true/>
+
+    <key>KeepAlive</key>
+    <true/>
+
+    <key>StandardOutPath</key>
+    <string>${PROJECT_DIR}/logs/bot_stdout.log</string>
+
+    <key>StandardErrorPath</key>
+    <string>${PROJECT_DIR}/logs/bot_stderr.log</string>
+
+    <key>EnvironmentVariables</key>
+    <dict>
+        <key>PATH</key>
+        <string>${PROJECT_DIR}/.venv/bin:${HOME}/.local/bin:/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin</string>
+        <key>HOME</key>
+        <string>${HOME}</string>
+        <key>VIRTUAL_ENV</key>
+        <string>${PROJECT_DIR}/.venv</string>
+        <key>PYTHONPATH</key>
+        <string>${PROJECT_DIR}/.venv/lib/python3.12/site-packages:${PROJECT_DIR}</string>
+    </dict>
+</dict>
+</plist>
