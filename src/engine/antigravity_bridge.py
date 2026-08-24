@@ -57,6 +57,20 @@ def ensure_deny_integrity():
         logger.error(f"Ошибка проверки целостности deny-листа: {e}")
 
 
+def get_bot_agent_rules() -> str:
+    """
+    Загружает внутренние правила агента бота из data/agent_rules.md.
+    Гарантирует точечное редактирование, detached-запуск серверов и форматирование для Telegram.
+    """
+    rules_path = Path(__file__).resolve().parent.parent.parent / "data" / "agent_rules.md"
+    if rules_path.exists():
+        try:
+            return rules_path.read_text(encoding="utf-8").strip()
+        except Exception as e:
+            logger.warning(f"Не удалось загрузить agent_rules.md: {e}")
+    return ""
+
+
 @dataclass
 class EngineEvent:
     event_type: str  # "conversation_id" | "thought" | "tool_call" | "token" | "error" | "done"
@@ -213,10 +227,16 @@ class AntigravityBridge:
 
         known_ids_before = get_existing_cli_conversation_ids()
 
+        # Внедрение правил агента в рабочий процесс
+        bot_rules = get_bot_agent_rules()
+        effective_prompt = prompt
+        if bot_rules:
+            effective_prompt = f"<system_invariants>\n{bot_rules}\n</system_invariants>\n\n{prompt}"
+
         cmd = [
             AGY_CLI_PATH,
             "--add-dir", str(project_dir),
-            "-p", prompt,
+            "-p", effective_prompt,
             "--effort", clean_effort,
             "--output-format", "text"
         ]
@@ -252,7 +272,6 @@ class AntigravityBridge:
 
                 # Читаем вывод с защитой от зависания при незакрытых пайпах дочерних процессов
                 while True:
-                    # Если agy уже завершился, дочитываем остаток буфера с коротким таймаутом и выходим
                     if process.returncode is not None:
                         try:
                             chunk = await asyncio.wait_for(process.stdout.read(512), timeout=0.3)
@@ -276,7 +295,6 @@ class AntigravityBridge:
                         )
 
                         if read_task in done:
-                            # Прочитали токен
                             for p in pending:
                                 p.cancel()
                             chunk = read_task.result()
@@ -287,7 +305,6 @@ class AntigravityBridge:
                                 has_output = True
                                 yield EngineEvent(event_type="token", content=decoded)
                         else:
-                            # Процесс agy завершился первым
                             try:
                                 chunk = await asyncio.wait_for(read_task, timeout=0.5)
                                 if chunk:
@@ -309,7 +326,6 @@ class AntigravityBridge:
                     has_output = True
                     yield EngineEvent(event_type="token", content=final_tail)
 
-                # Проверяем код возврата
                 try:
                     if process.returncode is None:
                         await asyncio.wait_for(process.wait(), timeout=1.0)
@@ -363,8 +379,13 @@ class AntigravityBridge:
         agent = Agent(local=local_config)
         self._active_agents[user_id] = agent
 
+        bot_rules = get_bot_agent_rules()
+        effective_prompt = prompt
+        if bot_rules:
+            effective_prompt = f"<system_invariants>\n{bot_rules}\n</system_invariants>\n\n{prompt}"
+
         try:
-            generator = agent.stream_chat(prompt=prompt)
+            generator = agent.stream_chat(prompt=effective_prompt)
             async for chunk in generator:
                 yield EngineEvent(event_type="token", content=str(chunk))
         finally:
