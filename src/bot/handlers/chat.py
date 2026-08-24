@@ -28,6 +28,7 @@ TEXT_FILE_EXTENSIONS = {
 
 _LAST_USER_PROMPT: Dict[int, str] = {}
 _ACTIVE_USER_TASKS: Dict[int, asyncio.Task] = {}
+_MEDIA_GROUPS: Dict[str, List[types.Message]] = {}
 TASK_WATCHDOG_TIMEOUT_SECONDS = 300  # 5 minutes maximum turn runtime
 
 
@@ -230,6 +231,57 @@ async def _execute_prompt(
                         logger.warning(f"Failed to auto-send attachment {file_path}: {e}")
 
 
+async def _process_media_group(messages: List[types.Message], bot: Bot):
+    """
+    Combines an entire Telegram album (media group of photos/documents)
+    into a single unified multimodal prompt for Gemini / Antigravity CLI.
+    """
+    if not messages:
+        return
+    first_msg = messages[0]
+    user_id = first_msg.from_user.id
+    chat_id = first_msg.chat.id
+    ts = time.strftime("%Y%m%d_%H%M%S")
+    uploads_dir = ensure_uploads_dir()
+
+    # Find first non-empty caption in the album
+    caption = ""
+    for m in messages:
+        if m.caption and m.caption.strip():
+            caption = m.caption.strip()
+            break
+
+    file_links = []
+    for idx, m in enumerate(messages, 1):
+        if m.photo:
+            photo = m.photo[-1]
+            file_path = uploads_dir / f"photo_{ts}_{idx}.jpg"
+            await bot.download(photo, destination=file_path)
+            file_links.append(f"{idx}. [photo_{ts}_{idx}.jpg](file://{file_path.resolve()})")
+        elif m.document:
+            doc = m.document
+            safe_name = "".join(c for c in (doc.file_name or "file") if c.isalnum() or c in "._-")
+            file_path = uploads_dir / f"{ts}_{idx}_{safe_name}"
+            await bot.download(doc, destination=file_path)
+            file_links.append(f"{idx}. [{doc.file_name}](file://{file_path.resolve()})")
+
+    file_list_str = "\n".join(file_links)
+    session = session_manager.get_session(user_id)
+    lang = session.language
+    header = f"User attached an album with {len(file_links)} images/files:" if lang == "en" else f"Пользователь прикрепил альбом из {len(file_links)} изображений/файлов:"
+
+    prompt_text = f"{header}\n{file_list_str}\n\n{caption}".strip()
+
+    await _execute_prompt(
+        chat_id=chat_id,
+        user_id=user_id,
+        bot=bot,
+        prompt_text=prompt_text,
+        reply_to_message_id=first_msg.message_id,
+        force_override=False
+    )
+
+
 @router.message(F.text & ~F.text.startswith("/"))
 async def handle_chat_message(message: types.Message, bot: Bot):
     await _execute_prompt(
@@ -376,6 +428,18 @@ async def handle_voice_message(message: types.Message, bot: Bot):
 
 @router.message(F.photo)
 async def handle_photo_message(message: types.Message, bot: Bot):
+    if message.media_group_id:
+        mg_id = message.media_group_id
+        if mg_id not in _MEDIA_GROUPS:
+            _MEDIA_GROUPS[mg_id] = [message]
+            await asyncio.sleep(0.8)
+            group_messages = _MEDIA_GROUPS.pop(mg_id, [])
+            await _process_media_group(group_messages, bot)
+        else:
+            _MEDIA_GROUPS[mg_id].append(message)
+        return
+
+    # Single photo
     photo = message.photo[-1]
     ts = time.strftime("%Y%m%d_%H%M%S")
     uploads_dir = ensure_uploads_dir()
@@ -398,6 +462,18 @@ async def handle_photo_message(message: types.Message, bot: Bot):
 
 @router.message(F.document)
 async def handle_document_message(message: types.Message, bot: Bot):
+    if message.media_group_id:
+        mg_id = message.media_group_id
+        if mg_id not in _MEDIA_GROUPS:
+            _MEDIA_GROUPS[mg_id] = [message]
+            await asyncio.sleep(0.8)
+            group_messages = _MEDIA_GROUPS.pop(mg_id, [])
+            await _process_media_group(group_messages, bot)
+        else:
+            _MEDIA_GROUPS[mg_id].append(message)
+        return
+
+    # Single document
     doc = message.document
     ts = time.strftime("%Y%m%d_%H%M%S")
     safe_name = "".join(c for c in (doc.file_name or "file") if c.isalnum() or c in "._-")
