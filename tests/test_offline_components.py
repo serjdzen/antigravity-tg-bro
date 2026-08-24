@@ -6,6 +6,7 @@ from src.bot.utils.formatter import (
     format_markdown_to_telegram_html,
     split_message
 )
+from src.bot.utils.streamer import close_unclosed_html_tags
 from src.config import Settings
 
 
@@ -56,6 +57,22 @@ class TestOfflineComponents(unittest.TestCase):
         self.assertGreater(len(parts), 1)
         for part in parts:
             self.assertLessEqual(len(part), 500)
+
+    def test_close_unclosed_html_tags(self):
+        # 1. Simple unclosed bold
+        raw = "Hello <b>World and some more text"
+        safe = close_unclosed_html_tags(raw)
+        self.assertEqual(safe, "Hello <b>World and some more text</b>")
+
+        # 2. Nested unclosed tags
+        raw2 = "<blockquote><b>Title</b>\n<code>let x = 1;"
+        safe2 = close_unclosed_html_tags(raw2)
+        self.assertEqual(safe2, "<blockquote><b>Title</b>\n<code>let x = 1;</code></blockquote>")
+
+        # 3. Truncated mid-tag like "<blo"
+        raw3 = "Some text <blo"
+        safe3 = close_unclosed_html_tags(raw3)
+        self.assertEqual(safe3, "Some text ")
 
 
 if __name__ == "__main__":

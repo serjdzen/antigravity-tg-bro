@@ -28,6 +28,7 @@ TEXT_FILE_EXTENSIONS = {
 
 _LAST_USER_PROMPT: Dict[int, str] = {}
 _ACTIVE_USER_TASKS: Dict[int, asyncio.Task] = {}
+TASK_WATCHDOG_TIMEOUT_SECONDS = 300  # 5 minutes maximum turn runtime
 
 
 def prepare_attachment_file(file_path: Path):
@@ -125,35 +126,44 @@ async def _execute_prompt(
         active_chat.updated_at = time.time()
 
         try:
-            async for event in antigravity_bridge.stream_chat(
-                user_id=user_id,
-                prompt=prompt_text,
-                project_dir=session.current_project_dir,
-                model_name=session.current_model,
-                effort=session.reasoning_effort,
-                conversation_id=active_chat.agy_conversation_id,
-                engine_mode=session.engine_mode,
-                force_override=effective_override
-            ):
-                if event.event_type == "conversation_id":
-                    if event.content:
-                        active_chat.agy_conversation_id = str(event.content)
-                        session_manager.save_to_disk()
-                elif event.event_type == "thought":
-                    if event.content:
-                        thought_blocks.append(format_thought_block(str(event.content), lang=lang))
-                elif event.event_type == "tool_call":
-                    tool_info = event.content or {}
-                    tool_name = tool_info.get("name", "tool")
-                    tool_args = tool_info.get("args", {})
-                    tool_blocks.append(format_tool_call_block(tool_name, tool_args, lang=lang))
-                elif event.event_type == "token":
-                    if event.content:
-                        full_response_text.append(str(event.content))
-                        await streamer.update_text(str(event.content))
-                elif event.event_type == "error":
-                    err_lbl = "Execution error" if lang == "en" else "Ошибка выполнения"
-                    thought_blocks.append(f"⚠️ <b>{err_lbl}:</b>\n<code>{event.content}</code>")
+            async def _run_stream_loop():
+                async for event in antigravity_bridge.stream_chat(
+                    user_id=user_id,
+                    prompt=prompt_text,
+                    project_dir=session.current_project_dir,
+                    model_name=session.current_model,
+                    effort=session.reasoning_effort,
+                    conversation_id=active_chat.agy_conversation_id,
+                    engine_mode=session.engine_mode,
+                    force_override=effective_override
+                ):
+                    if event.event_type == "conversation_id":
+                        if event.content:
+                            active_chat.agy_conversation_id = str(event.content)
+                            session_manager.save_to_disk()
+                    elif event.event_type == "thought":
+                        if event.content:
+                            thought_blocks.append(format_thought_block(str(event.content), lang=lang))
+                    elif event.event_type == "tool_call":
+                        tool_info = event.content or {}
+                        tool_name = tool_info.get("name", "tool")
+                        tool_args = tool_info.get("args", {})
+                        tool_blocks.append(format_tool_call_block(tool_name, tool_args, lang=lang))
+                    elif event.event_type == "token":
+                        if event.content:
+                            full_response_text.append(str(event.content))
+                            await streamer.update_text(str(event.content))
+                    elif event.event_type == "error":
+                        err_lbl = "Execution error" if lang == "en" else "Ошибка выполнения"
+                        thought_blocks.append(f"⚠️ <b>{err_lbl}:</b>\n<code>{event.content}</code>")
+
+            await asyncio.wait_for(_run_stream_loop(), timeout=TASK_WATCHDOG_TIMEOUT_SECONDS)
+
+        except asyncio.TimeoutError:
+            logger.warning(f"Task for user {user_id} hit watchdog timeout ({TASK_WATCHDOG_TIMEOUT_SECONDS}s).")
+            antigravity_bridge.cancel_active_task(user_id)
+            timeout_lbl = "Task exceeded runtime limit (5 min watchdog timeout)" if lang == "en" else "Превышен лимит времени выполнения задачи (таймаут 5 мин)"
+            thought_blocks.append(f"⏱ <b>{timeout_lbl}</b>")
 
         except asyncio.CancelledError:
             logger.info(f"Task for user {user_id} cancelled via /stop.")

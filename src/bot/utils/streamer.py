@@ -1,3 +1,4 @@
+import re
 import asyncio
 import logging
 import time
@@ -11,12 +12,49 @@ from src.bot.utils.formatter import (
 logger = logging.getLogger(__name__)
 
 
+def close_unclosed_html_tags(html_snippet: str) -> str:
+    """
+    Scans an HTML snippet for opened tags and automatically closes unclosed tags
+    in correct LIFO order, ensuring Telegram never rejects with 'can't parse entities: Unclosed tag'.
+    """
+    if not html_snippet:
+        return ""
+
+    # Remove any trailing incomplete tag like "<blo" or "<b"
+    html_snippet = re.sub(r"<[a-zA-Z0-9/][^>]*$", "", html_snippet)
+
+    # Supported Telegram HTML tags
+    supported_tags = ["b", "strong", "i", "em", "u", "ins", "s", "strike", "del", "code", "pre", "blockquote", "a"]
+    tag_pattern = re.compile(r"</?([a-zA-Z0-9]+)(?:\s+[^>]*)?>")
+
+    tag_stack = []
+    for match in tag_pattern.finditer(html_snippet):
+        full_tag = match.group(0)
+        tag_name = match.group(1).lower()
+        if tag_name not in supported_tags:
+            continue
+
+        if full_tag.startswith("</"):
+            if tag_stack and tag_stack[-1] == tag_name:
+                tag_stack.pop()
+            elif tag_name in tag_stack:
+                while tag_stack and tag_stack[-1] != tag_name:
+                    tag_stack.pop()
+                if tag_stack:
+                    tag_stack.pop()
+        else:
+            tag_stack.append(tag_name)
+
+    closing_tags = "".join(f"</{tag}>" for tag in reversed(tag_stack))
+    return html_snippet + closing_tags
+
+
 class LiveStreamer:
     """
     Плавный потоковый стример сообщений в Telegram:
     - Создает сообщение-заполнитель на месте.
     - В реальном времени плавно обновляет текст в том же сообщении (edit_message_text).
-    - Исключает любые визуальные скачки, дергания вниз и конфликты с черновиками.
+    - Исключает любые визуальные скачки, дергания вниз и ошибки парсинга незакрытых тегов.
     """
     def __init__(self, bot: Bot, chat_id: int, reply_to_message_id: Optional[int] = None):
         self.bot = bot
@@ -52,21 +90,34 @@ class LiveStreamer:
             async with self._edit_lock:
                 formatted_preview = format_markdown_to_telegram_html(self.accumulated_text.strip())
                 if formatted_preview and formatted_preview != self.last_sent_text:
-                    # Ограничиваем превью лимитом сообщения
-                    cut_preview = formatted_preview[:3800]
+                    # Ограничиваем превью лимитом сообщения и гарантированно закрываем теги
+                    raw_cut = formatted_preview[:3800]
+                    safe_preview = close_unclosed_html_tags(raw_cut)
+                    
                     try:
                         await self.bot.edit_message_text(
                             chat_id=self.chat_id,
                             message_id=self.message_id,
-                            text=cut_preview + " ▌",
+                            text=safe_preview + " ▌",
                             parse_mode="HTML"
                         )
-                        self.last_sent_text = cut_preview
+                        self.last_sent_text = formatted_preview
                         self.last_edit_time = now
                     except Exception as e:
-                        # Игнорируем ошибки MessageNotModified
-                        if "message is not modified" not in str(e).lower():
-                            logger.debug(f"Ошибка инлайн-редактирования стрима: {e}")
+                        err_str = str(e).lower()
+                        if "message is not modified" not in err_str:
+                            logger.debug(f"Ошибка инлайн-редактирования стрима: {e}, fallback на plain-text")
+                            try:
+                                clean_text = re.sub(r"<[^>]+>", "", raw_cut)
+                                await self.bot.edit_message_text(
+                                    chat_id=self.chat_id,
+                                    message_id=self.message_id,
+                                    text=clean_text + " ▌"
+                                )
+                                self.last_sent_text = formatted_preview
+                                self.last_edit_time = now
+                            except Exception:
+                                pass
 
     async def finalize(
         self,
@@ -97,7 +148,6 @@ class LiveStreamer:
 
         # Редактируем первое сообщение на месте (без прыжков и курсора!)
         first_chunk = chunks[0]
-        # Если частей несколько, прикрепляем клавиатуру к последней, иначе к первой
         first_kb = reply_markup if len(chunks) == 1 else None
 
         if self.message_id:
@@ -111,7 +161,6 @@ class LiveStreamer:
                 )
             except Exception as e:
                 logger.warning(f"Ошибка финального HTML редактирования ({e}), fallback на чистый текст...")
-                import re
                 clean_chunk = re.sub(r"<[^>]+>", "", first_chunk)
                 try:
                     await self.bot.edit_message_text(
@@ -123,7 +172,6 @@ class LiveStreamer:
                 except Exception:
                     pass
         else:
-            # Если начальное сообщение не создалось
             await self.bot.send_message(
                 chat_id=self.chat_id,
                 text=first_chunk,
@@ -132,7 +180,7 @@ class LiveStreamer:
                 parse_mode="HTML"
             )
 
-        # Если текст превысил 4000 символов, отправляем оставшиеся части
+        # Если текст превысил лимит, отправляем оставшиеся части
         for idx, chunk in enumerate(chunks[1:]):
             is_last = (idx == len(chunks[1:]) - 1)
             kb_for_chunk = reply_markup if is_last else None
@@ -144,7 +192,6 @@ class LiveStreamer:
                     parse_mode="HTML"
                 )
             except Exception:
-                import re
                 clean_chunk = re.sub(r"<[^>]+>", "", chunk)
                 await self.bot.send_message(
                     chat_id=self.chat_id,

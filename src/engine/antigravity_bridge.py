@@ -250,31 +250,75 @@ class AntigravityBridge:
                 decoder = codecs.getincrementaldecoder("utf-8")(errors="replace")
                 has_output = False
 
+                # Читаем вывод с защитой от зависания при незакрытых пайпах дочерних процессов
                 while True:
+                    # Если agy уже завершился, дочитываем остаток буфера с коротким таймаутом и выходим
+                    if process.returncode is not None:
+                        try:
+                            chunk = await asyncio.wait_for(process.stdout.read(512), timeout=0.3)
+                        except (asyncio.TimeoutError, asyncio.CancelledError):
+                            break
+                        if not chunk:
+                            break
+                        decoded = decoder.decode(chunk, final=False)
+                        if decoded:
+                            has_output = True
+                            yield EngineEvent(event_type="token", content=decoded)
+                        continue
+
+                    read_task = asyncio.create_task(process.stdout.read(512))
+                    wait_task = asyncio.create_task(process.wait())
+
                     try:
-                        chunk = await process.stdout.read(512)
-                    except (asyncio.CancelledError, ConnectionResetError):
+                        done, pending = await asyncio.wait(
+                            [read_task, wait_task],
+                            return_when=asyncio.FIRST_COMPLETED
+                        )
+
+                        if read_task in done:
+                            # Прочитали токен
+                            for p in pending:
+                                p.cancel()
+                            chunk = read_task.result()
+                            if not chunk:
+                                break
+                            decoded = decoder.decode(chunk, final=False)
+                            if decoded:
+                                has_output = True
+                                yield EngineEvent(event_type="token", content=decoded)
+                        else:
+                            # Процесс agy завершился первым
+                            try:
+                                chunk = await asyncio.wait_for(read_task, timeout=0.5)
+                                if chunk:
+                                    decoded = decoder.decode(chunk, final=False)
+                                    if decoded:
+                                        has_output = True
+                                        yield EngineEvent(event_type="token", content=decoded)
+                            except (asyncio.TimeoutError, asyncio.CancelledError):
+                                read_task.cancel()
+                            break
+
+                    except asyncio.CancelledError:
+                        read_task.cancel()
+                        wait_task.cancel()
                         break
-                    if not chunk:
-                        break
-                    decoded = decoder.decode(chunk, final=False)
-                    if decoded:
-                        has_output = True
-                        yield EngineEvent(event_type="token", content=decoded)
 
                 final_tail = decoder.decode(b"", final=True)
                 if final_tail:
                     has_output = True
                     yield EngineEvent(event_type="token", content=final_tail)
 
+                # Проверяем код возврата
                 try:
-                    await process.wait()
-                except asyncio.CancelledError:
+                    if process.returncode is None:
+                        await asyncio.wait_for(process.wait(), timeout=1.0)
+                except (asyncio.TimeoutError, asyncio.CancelledError):
                     pass
 
-                if not has_output and process.returncode != 0:
+                if not has_output and (process.returncode is not None and process.returncode != 0):
                     try:
-                        err_bytes = await process.stderr.read()
+                        err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=1.0)
                         err_msg = err_bytes.decode(errors="replace").strip()
                         if err_msg:
                             yield EngineEvent(event_type="error", content=err_msg)
