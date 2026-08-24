@@ -1,6 +1,7 @@
 import os
 import json
 import codecs
+import signal
 import asyncio
 import logging
 import contextlib
@@ -133,17 +134,28 @@ class AntigravityBridge:
 
     def cancel_active_task(self, user_id: int) -> bool:
         """
-        Прерывает запущенный процесс agy CLI для указанного пользователя.
+        Принудительно прерывает запущенный процесс agy CLI для указанного пользователя
+        и уничтожает всю группу дочерних процессов (SIGTERM -> SIGKILL).
         """
         agent_proc = self._active_agents.get(user_id)
         if agent_proc:
             if isinstance(agent_proc, asyncio.subprocess.Process):
                 try:
-                    agent_proc.terminate()
-                    logger.info(f"⏹ Процесс задачи для user {user_id} принудительно прерван по команде /stop.")
+                    pgid = os.getpgid(agent_proc.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    agent_proc.kill()
+                    os.killpg(pgid, signal.SIGKILL)
+                    logger.info(f"⏹ Процесс задачи и группа pgid={pgid} для user {user_id} принудительно убиты.")
+                    return True
+                except ProcessLookupError:
                     return True
                 except Exception as e:
                     logger.warning(f"Не удалось прервать процесс: {e}")
+                    try:
+                        agent_proc.kill()
+                        return True
+                    except Exception:
+                        pass
         return False
 
     async def stream_chat(
@@ -223,13 +235,15 @@ class AntigravityBridge:
             elif "claude" in model_name.lower():
                 cmd.extend(["--model", model_name])
 
+        process = None
         try:
             async with temporary_deny_override(force_override):
                 process = await asyncio.create_subprocess_exec(
                     *cmd,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
-                    cwd=str(project_dir)
+                    cwd=str(project_dir),
+                    start_new_session=True
                 )
                 self._active_agents[user_id] = process
 
@@ -237,7 +251,10 @@ class AntigravityBridge:
                 has_output = False
 
                 while True:
-                    chunk = await process.stdout.read(512)
+                    try:
+                        chunk = await process.stdout.read(512)
+                    except (asyncio.CancelledError, ConnectionResetError):
+                        break
                     if not chunk:
                         break
                     decoded = decoder.decode(chunk, final=False)
@@ -250,13 +267,29 @@ class AntigravityBridge:
                     has_output = True
                     yield EngineEvent(event_type="token", content=final_tail)
 
-                await process.wait()
+                try:
+                    await process.wait()
+                except asyncio.CancelledError:
+                    pass
 
-                if not has_output:
-                    err_bytes = await process.stderr.read()
-                    err_msg = err_bytes.decode(errors="replace").strip()
-                    if err_msg:
-                        yield EngineEvent(event_type="error", content=err_msg)
+                if not has_output and process.returncode != 0:
+                    try:
+                        err_bytes = await process.stderr.read()
+                        err_msg = err_bytes.decode(errors="replace").strip()
+                        if err_msg:
+                            yield EngineEvent(event_type="error", content=err_msg)
+                    except Exception:
+                        pass
+
+        except asyncio.CancelledError:
+            logger.info(f"Стриминг CLI для user {user_id} был отменен.")
+            if process:
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGKILL)
+                except Exception:
+                    pass
+            raise
 
         finally:
             self._active_agents.pop(user_id, None)
