@@ -4,9 +4,11 @@ import logging
 import time
 from typing import List, Optional
 from aiogram import Bot, types
+from aiogram.types import InputRichMessage
 from src.bot.utils.formatter import (
     format_markdown_to_telegram_html,
-    split_message
+    split_message,
+    has_markdown_table
 )
 
 logger = logging.getLogger(__name__)
@@ -125,6 +127,52 @@ class LiveStreamer:
         reply_markup: Optional[types.InlineKeyboardMarkup] = None
     ):
         self.is_finalized = True
+
+        # Check if accumulated text contains Markdown tables
+        if has_markdown_table(self.accumulated_text):
+            full_md_parts = []
+            if extra_blocks:
+                for block in extra_blocks:
+                    if block.strip():
+                        full_md_parts.append(block.strip())
+            if self.accumulated_text.strip():
+                full_md_parts.append(self.accumulated_text.strip())
+            elif not extra_blocks:
+                full_md_parts.append("✅ Задача выполнена.")
+
+            rich_content = "\n\n".join(full_md_parts)
+
+            # Attempt 1: In-place edit into Rich Message ("Статья")
+            if self.message_id:
+                try:
+                    await self.bot.edit_message_text(
+                        chat_id=self.chat_id,
+                        message_id=self.message_id,
+                        rich_message=InputRichMessage(markdown=rich_content),
+                        reply_markup=reply_markup
+                    )
+                    return
+                except Exception as e:
+                    logger.info(f"edit_message_text с rich_message отклонен ({e}), пробуем send_rich_message...")
+
+            # Attempt 2: Send fresh Rich Message and delete placeholder on success
+            try:
+                msg = await self.bot.send_rich_message(
+                    chat_id=self.chat_id,
+                    rich_message=InputRichMessage(markdown=rich_content),
+                    reply_to_message_id=self.reply_to_message_id,
+                    reply_markup=reply_markup
+                )
+                if self.message_id:
+                    try:
+                        await self.bot.delete_message(chat_id=self.chat_id, message_id=self.message_id)
+                    except Exception:
+                        pass
+                self.message_id = msg.message_id
+                return
+            except Exception as e:
+                logger.warning(f"send_rich_message завершился с ошибкой ({e}), fallback на Card Layout HTML...")
+
         full_html_parts = []
 
         # Блоки мыслей или вызовов инструментов
@@ -135,7 +183,7 @@ class LiveStreamer:
 
         # Основной текст
         if self.accumulated_text.strip():
-            formatted_body = format_markdown_to_telegram_html(self.accumulated_text.strip())
+            formatted_body = format_markdown_to_telegram_html(self.accumulated_text.strip(), convert_tables=True)
             full_html_parts.append(formatted_body)
         elif not extra_blocks:
             full_html_parts.append("<i>✅ Задача выполнена.</i>")

@@ -34,6 +34,7 @@ scripts/com.antigravity.tgbot.plist
 
 # Temporary, scratch & testing artifacts
 *.tmp
+*.pid
 .pytest_cache/
 .coverage
 htmlcov/
