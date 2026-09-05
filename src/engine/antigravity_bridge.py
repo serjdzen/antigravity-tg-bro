@@ -248,12 +248,16 @@ class AntigravityBridge:
             cmd.extend(["--conversation", conversation_id])
 
         if model_name:
-            if "3.7" in model_name or "flash" in model_name.lower():
+            if "3.8" in model_name:
+                cmd.extend(["--model", "gemini-3.8-flash"])
+            elif "3.7" in model_name:
                 cmd.extend(["--model", "gemini-3.7-flash"])
             elif "3.1" in model_name or "pro" in model_name.lower():
                 cmd.extend(["--model", "gemini-3.1-pro"])
             elif "claude" in model_name.lower():
                 cmd.extend(["--model", model_name])
+            elif "flash" in model_name.lower():
+                cmd.extend(["--model", "gemini-3.8-flash"])
 
         process = None
         try:

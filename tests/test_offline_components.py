@@ -7,6 +7,7 @@ from src.bot.utils.formatter import (
     split_message
 )
 from src.bot.utils.streamer import close_unclosed_html_tags
+from src.engine.models_loader import FEATURED_MODELS, get_model_emoji
 from src.config import Settings
 
 
@@ -73,6 +74,12 @@ class TestOfflineComponents(unittest.TestCase):
         raw3 = "Some text <blo"
         safe3 = close_unclosed_html_tags(raw3)
         self.assertEqual(safe3, "Some text ")
+
+    def test_featured_models_gemini_38(self):
+        model_ids = [m[0] for m in FEATURED_MODELS]
+        self.assertIn("gemini-3.8-flash", model_ids)
+        self.assertEqual(get_model_emoji("gemini-3.8-flash"), "⚡")
+        self.assertEqual(get_model_emoji("gemini-3.8-flash-high"), "⚡")
 
 
 if __name__ == "__main__":

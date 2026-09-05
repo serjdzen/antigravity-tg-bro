@@ -10,6 +10,7 @@ logger = logging.getLogger(__name__)
 # Топ-флагманы (Featured)
 FEATURED_MODELS: List[Tuple[str, str]] = [
     ("antigravity-preview-05-2026", "🛸 Antigravity Agent"),
+    ("gemini-3.8-flash", "⚡ Gemini 3.8 Flash"),
     ("gemini-3.7-flash", "🧠 Gemini 3.7 Flash"),
     ("gemini-3.1-pro-preview", "💎 Gemini 3.1 Pro"),
     ("claude-4-6-sonnet", "🎭 Claude 4.6 Sonnet"),
@@ -33,6 +34,8 @@ def get_model_emoji(model_id: str) -> str:
         return "👑"
     if "claude" in m:
         return "🎭"
+    if "3.8" in m:
+        return "⚡"
     if "3.7" in m:
         return "🧠"
     if "3.1-pro" in m:
@@ -48,8 +51,9 @@ def fetch_all_live_models() -> List[Tuple[str, str]]:
     api_key = settings.GEMINI_API_KEY or os.environ.get("GEMINI_API_KEY")
     discovered = []
 
-    # Добавляем актуальные модели Claude 4.6
+    # Добавляем актуальные флагманские модели
     claude_models = [
+        ("gemini-3.8-flash", "Gemini 3.8 Flash"),
         ("claude-4-6-sonnet", "Claude 4.6 Sonnet"),
         ("claude-4-6-opus", "Claude 4.6 Opus"),
     ]
@@ -86,24 +90,26 @@ def fetch_all_live_models() -> List[Tuple[str, str]]:
         mid = item[0].lower()
         if "antigravity" in mid:
             return 0
-        if "3.7" in mid:
+        if "3.8" in mid:
             return 1
-        if "3.1-pro" in mid:
+        if "3.7" in mid:
             return 2
-        if "claude-4-6-sonnet" in mid:
+        if "3.1-pro" in mid:
             return 3
-        if "claude-4-6-opus" in mid:
+        if "claude-4-6-sonnet" in mid:
             return 4
-        if "research" in mid:
+        if "claude-4-6-opus" in mid:
             return 5
-        if "claude" in mid:
+        if "research" in mid:
             return 6
-        if "3.6" in mid:
+        if "claude" in mid:
             return 7
-        if "3.5" in mid:
+        if "3.6" in mid:
             return 8
-        if "3.1" in mid:
+        if "3.5" in mid:
             return 9
+        if "3.1" in mid:
+            return 10
         return 20
 
     discovered.sort(key=sort_priority)
