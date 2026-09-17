@@ -78,6 +78,10 @@ antigravity-tg-bro/
    - Default language is defined in `settings.BOT_LANGUAGE` (`en` by default).
    - When adding new UI text or commands, always provide both `en` and `ru` translations in `src/bot/locales.py`.
 
+8. **Rich Messages («Статья») & Table Fallback**:
+   - Messages containing Markdown tables are finalized via `InputRichMessage(markdown=...)` (format "Статья" in Telegram Bot API).
+   - If Rich Messages fail or are unsupported, a 3-tier fallback automatically transforms tables into responsive mobile Card Layout blocks (`<blockquote>`) in `src/bot/utils/formatter.py`, ensuring tables never break on mobile screens.
+
 ---
 
 ## 🛠️ Verification & Test Recipes

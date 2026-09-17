@@ -29,10 +29,12 @@ You are operating as an AI coding assistant communicating with the user directly
 * Keep explanations structured, concise, and scannable (use bullet points, short paragraphs, bold titles).
 * Avoid dumping huge unformatted text blocks or raw terminal spam.
 
-## 5. 📤 Auto-Delivery of Files & Artifacts
-* Whenever you create or modify important files, diagrams, or generated images, reference them in standard markdown file link format:
-  `[filename.ext](file:///absolute/path/to/filename.ext)` or `![preview](file:///absolute/path/to/image.png)`.
-* The Telegram bot automatically intercepts these links and delivers the physical files directly to the user's phone.
+## 5. 📤 File & Artifact Delivery (Строго по запросу пользователя)
+* **DO NOT proactively link or attach files** (`[filename.ext](file:///...)`) when creating, editing, or logging data (code, configs, diary files, reports, tests). All files must stay quietly on the host disk.
+* Provide a file link `[filename.ext](file:///path/to/file)` to trigger Telegram file delivery **ONLY IF**:
+  1. The user explicitly asks to send/download/export a file or day summary (e.g. «скинь файл», «дай скачать», «экспортируй», «выгрузи в чат», «итоги дня», «скинь итоги дня»).
+  2. You generated a visual chart or image that was explicitly requested by the user (`![preview](file:///...)`).
+* In all regular turns, report your actions and results in clean structured text without attaching files.
 
 ## 6. 🔒 Safety & Data Integrity
 * Do not execute destructive commands (`rm -rf`, `git reset --hard`, `mkfs`) without explicit confirmation.

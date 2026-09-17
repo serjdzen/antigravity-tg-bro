@@ -51,6 +51,7 @@ The bot bridges Telegram's asynchronous event loop with the local execution envi
 2. **FloodWait Throttling**: Telegram limits message edits to ~1-2 edits per second per chat.
    - **Solution**: `LiveStreamer` buffers tokens and updates Telegram messages via `edit_message_text` with an adaptive 1.4-second rate limit.
 3. **Expandable Thought Blocks**: Reasoning steps and tool executions are styled with HTML blockquotes (`<blockquote expandable>`).
+4. **Native Rich Messages («Статья») & Table Handling**: Markdown tables are rendered natively as Telegram Rich Messages (`InputRichMessage`) with up to 32,768 characters. If rejected by Telegram clients, a 3-tier fallback automatically converts tables into responsive mobile Card Layout blocks (`<blockquote>`), preventing broken tables on smartphones.
 
 ---
 
