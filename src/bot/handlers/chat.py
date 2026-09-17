@@ -342,6 +342,8 @@ async def _execute_prompt(
     await queue.put(queued_item)
     worker_task = asyncio.create_task(_user_queue_worker(user_id))
     _ACTIVE_USER_TASKS[user_id] = worker_task
+    # Yield control so worker immediately begins execution and pops initial item from queue
+    await asyncio.sleep(0)
 
 
 async def _process_media_group(messages: List[types.Message], bot: Bot):
