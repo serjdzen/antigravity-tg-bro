@@ -37,6 +37,7 @@ class UserSession:
     reasoning_effort: str = "low"  # "low" | "medium" | "high" | "off"
     engine_mode: str = "cli"  # "cli" | "sdk"
     safety_approval: bool = True  # Inline confirmation for destructive commands
+    queue_mode: str = "queue"  # "queue" | "block"
     language: str = field(default_factory=lambda: settings.BOT_LANGUAGE)  # "en" | "ru"
     active_chat_id: Optional[str] = None
     chats: Dict[str, ChatThread] = field(default_factory=dict)
@@ -122,6 +123,7 @@ class SessionManager:
                 reasoning_effort="low",
                 engine_mode="cli",
                 safety_approval=True,
+                queue_mode="queue",
                 language=settings.BOT_LANGUAGE
             )
             session.get_active_chat()
@@ -145,6 +147,7 @@ class SessionManager:
                     "reasoning_effort": s.reasoning_effort,
                     "engine_mode": s.engine_mode,
                     "safety_approval": s.safety_approval,
+                    "queue_mode": s.queue_mode,
                     "language": s.language,
                     "active_chat_id": s.active_chat_id,
                     "chats": chats_dict
@@ -183,6 +186,7 @@ class SessionManager:
                     reasoning_effort=s_data.get("reasoning_effort", "low"),
                     engine_mode=s_data.get("engine_mode", "cli"),
                     safety_approval=s_data.get("safety_approval", True),
+                    queue_mode=s_data.get("queue_mode", "queue"),
                     language=s_data.get("language", settings.BOT_LANGUAGE),
                     active_chat_id=s_data.get("active_chat_id"),
                     chats=chats

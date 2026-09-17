@@ -6,6 +6,7 @@ import logging
 from urllib.parse import unquote
 from pathlib import Path
 from typing import Optional, List, Dict
+from dataclasses import dataclass
 from aiogram import Router, types, Bot, F
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BufferedInputFile
 from src.engine.session_manager import session_manager
@@ -30,6 +31,25 @@ _LAST_USER_PROMPT: Dict[int, str] = {}
 _ACTIVE_USER_TASKS: Dict[int, asyncio.Task] = {}
 _MEDIA_GROUPS: Dict[str, List[types.Message]] = {}
 TASK_WATCHDOG_TIMEOUT_SECONDS = 300  # 5 minutes maximum turn runtime
+MAX_QUEUE_SIZE = 10
+_USER_QUEUES: Dict[int, asyncio.Queue] = {}
+
+
+@dataclass
+class QueuedPrompt:
+    chat_id: int
+    user_id: int
+    bot: Bot
+    prompt_text: str
+    reply_to_message_id: Optional[int] = None
+    force_override: bool = False
+    notify_message_id: Optional[int] = None
+
+
+def _get_user_queue(user_id: int) -> asyncio.Queue:
+    if user_id not in _USER_QUEUES:
+        _USER_QUEUES[user_id] = asyncio.Queue(maxsize=MAX_QUEUE_SIZE)
+    return _USER_QUEUES[user_id]
 
 
 def prepare_attachment_file(file_path: Path):
@@ -74,41 +94,32 @@ def extract_attachment_paths(text: str) -> List[Path]:
     return found_paths
 
 
-async def _execute_prompt(
-    chat_id: int,
-    user_id: int,
-    bot: Bot,
-    prompt_text: str,
-    reply_to_message_id: Optional[int] = None,
-    force_override: bool = False
-):
+async def _execute_single_prompt(item: QueuedPrompt):
+    """
+    Executes a single prompt turn from the queue with LiveStreamer,
+    session locking, watchdog timeout, and automatic attachment handling.
+    """
+    chat_id = item.chat_id
+    user_id = item.user_id
+    bot = item.bot
+    prompt_text = item.prompt_text
+    reply_to_message_id = item.reply_to_message_id
+    force_override = item.force_override
+    notify_message_id = item.notify_message_id
+
+    # Clean up temporary "added to queue" notification message if it exists
+    if notify_message_id:
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=notify_message_id)
+        except Exception:
+            pass
+
     session = session_manager.get_session(user_id)
     active_chat = session.get_active_chat()
     lang = session.language
 
-    # Check if there is an active running task for this user
-    active_task = _ACTIVE_USER_TASKS.get(user_id)
-    if active_task and not active_task.done():
-        busy_msg = (
-            "⏳ <b>Agent is currently executing a previous task.</b>\nPlease wait for completion or send /stop."
-            if lang == "en" else
-            "⏳ <b>Агент уже выполняет предыдущую задачу.</b>\nПожалуйста, дождитесь завершения или отправьте /stop."
-        )
-        await bot.send_message(
-            chat_id=chat_id,
-            text=busy_msg,
-            reply_to_message_id=reply_to_message_id,
-            parse_mode="HTML"
-        )
-        return
-
     _LAST_USER_PROMPT[user_id] = prompt_text
     effective_override = force_override or (not session.safety_approval)
-
-    # Register current task
-    current_async_task = asyncio.current_task()
-    if current_async_task:
-        _ACTIVE_USER_TASKS[user_id] = current_async_task
 
     async with session.lock:
         streamer = LiveStreamer(bot=bot, chat_id=chat_id, reply_to_message_id=reply_to_message_id)
@@ -171,6 +182,7 @@ async def _execute_prompt(
             was_cancelled = True
             halt_lbl = "Task halted by user (/stop)" if lang == "en" else "Задача прервана пользователем (/stop)"
             thought_blocks.append(f"🛑 <b>{halt_lbl}</b>")
+            raise
 
         except Exception as e:
             logger.error(f"Unhandled error in chat loop: {e}", exc_info=True)
@@ -178,8 +190,6 @@ async def _execute_prompt(
             thought_blocks.append(f"❌ <b>{crit_lbl}:</b>\n<code>{str(e)}</code>")
 
         finally:
-            _ACTIVE_USER_TASKS.pop(user_id, None)
-
             extra_blocks = thought_blocks + tool_blocks
             complete_output = "".join(full_response_text)
 
@@ -229,6 +239,109 @@ async def _execute_prompt(
                         logger.info(f"Automatically delivered attachment: {file_path.name}")
                     except Exception as e:
                         logger.warning(f"Failed to auto-send attachment {file_path}: {e}")
+
+
+async def _user_queue_worker(user_id: int):
+    """
+    Background worker loop for a single user that sequentially processes
+    all items in their queue until the queue is completely drained.
+    """
+    queue = _get_user_queue(user_id)
+    try:
+        while not queue.empty():
+            item: QueuedPrompt = await queue.get()
+            try:
+                await _execute_single_prompt(item)
+            except asyncio.CancelledError:
+                logger.info(f"Queue worker for user {user_id} cancelled.")
+                break
+            except Exception as e:
+                logger.error(f"Error executing queued item for user {user_id}: {e}", exc_info=True)
+            finally:
+                queue.task_done()
+    finally:
+        _ACTIVE_USER_TASKS.pop(user_id, None)
+
+
+async def _execute_prompt(
+    chat_id: int,
+    user_id: int,
+    bot: Bot,
+    prompt_text: str,
+    reply_to_message_id: Optional[int] = None,
+    force_override: bool = False
+):
+    """
+    Entry point for all user prompts (text, audio, photos, documents).
+    Routes prompts into the sequential queue or rejects based on session.queue_mode.
+    """
+    session = session_manager.get_session(user_id)
+    lang = session.language
+    queue = _get_user_queue(user_id)
+
+    # Check if there is an active running task for this user
+    active_task = _ACTIVE_USER_TASKS.get(user_id)
+    is_busy = bool(active_task and not active_task.done())
+
+    if is_busy:
+        if session.queue_mode == "block":
+            busy_msg = (
+                "⏳ <b>Agent is currently executing a previous task.</b>\nPlease wait for completion or send /stop."
+                if lang == "en" else
+                "⏳ <b>Агент уже выполняет предыдущую задачу.</b>\nПожалуйста, дождитесь завершения или отправьте /stop."
+            )
+            await bot.send_message(
+                chat_id=chat_id,
+                text=busy_msg,
+                reply_to_message_id=reply_to_message_id,
+                parse_mode="HTML"
+            )
+            return
+
+        # session.queue_mode == "queue"
+        if queue.qsize() >= MAX_QUEUE_SIZE:
+            limit_msg = t("queue_full", lang, limit=MAX_QUEUE_SIZE)
+            await bot.send_message(
+                chat_id=chat_id,
+                text=limit_msg,
+                reply_to_message_id=reply_to_message_id,
+                parse_mode="HTML"
+            )
+            return
+
+        pos = queue.qsize() + 1
+        notify_text = t("msg_queued", lang, pos=pos)
+        notify_msg = await bot.send_message(
+            chat_id=chat_id,
+            text=notify_text,
+            reply_to_message_id=reply_to_message_id,
+            parse_mode="HTML"
+        )
+        queued_item = QueuedPrompt(
+            chat_id=chat_id,
+            user_id=user_id,
+            bot=bot,
+            prompt_text=prompt_text,
+            reply_to_message_id=reply_to_message_id,
+            force_override=force_override,
+            notify_message_id=notify_msg.message_id
+        )
+        await queue.put(queued_item)
+        return
+
+    # User is not busy: enqueue prompt and launch worker
+    queued_item = QueuedPrompt(
+        chat_id=chat_id,
+        user_id=user_id,
+        bot=bot,
+        prompt_text=prompt_text,
+        reply_to_message_id=reply_to_message_id,
+        force_override=force_override,
+        notify_message_id=None
+    )
+    await queue.put(queued_item)
+    worker_task = asyncio.create_task(_user_queue_worker(user_id))
+    _ACTIVE_USER_TASKS[user_id] = worker_task
 
 
 async def _process_media_group(messages: List[types.Message], bot: Bot):
@@ -347,24 +460,45 @@ async def handle_stop_command(message: types.Message, bot: Bot):
     /stop command:
     - Kills the running OS process group (CLI / tool subprocesses).
     - Cancels the underlying asyncio task, releasing the session lock immediately.
+    - Drains and clears any pending items from the user queue.
     """
     user_id = message.from_user.id
     session = session_manager.get_session(user_id)
+    lang = session.language
 
     # 1. Kill OS process and its children
     was_cancelled_proc = antigravity_bridge.cancel_active_task(user_id)
 
-    # 2. Cancel the asyncio task to instantly release session.lock
+    # 2. Cancel active asyncio task
     active_task = _ACTIVE_USER_TASKS.get(user_id)
     was_cancelled_task = False
     if active_task and not active_task.done():
         active_task.cancel()
         was_cancelled_task = True
 
-    if was_cancelled_proc or was_cancelled_task:
-        await message.reply(t("task_stopped", session.language), parse_mode="HTML")
+    # 3. Drain and clear pending queue
+    queue = _get_user_queue(user_id)
+    cleared_count = 0
+    while not queue.empty():
+        try:
+            item: QueuedPrompt = queue.get_nowait()
+            cleared_count += 1
+            if item.notify_message_id:
+                try:
+                    await bot.delete_message(chat_id=item.chat_id, message_id=item.notify_message_id)
+                except Exception:
+                    pass
+            queue.task_done()
+        except Exception:
+            break
+
+    if was_cancelled_proc or was_cancelled_task or cleared_count > 0:
+        if cleared_count > 0:
+            await message.reply(t("task_stopped_with_queue", lang, count=cleared_count), parse_mode="HTML")
+        else:
+            await message.reply(t("task_stopped", lang), parse_mode="HTML")
     else:
-        await message.reply(t("task_nothing_to_stop", session.language), parse_mode="HTML")
+        await message.reply(t("task_nothing_to_stop", lang), parse_mode="HTML")
 
 
 @router.message(F.voice | F.audio)

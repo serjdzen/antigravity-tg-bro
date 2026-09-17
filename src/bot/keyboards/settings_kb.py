@@ -118,12 +118,13 @@ def build_all_models_keyboard(
 def build_system_settings_keyboard(
     safety_approval: bool,
     engine_mode: str,
-    uploads_count: int,
-    uploads_mb: float,
+    queue_mode: str = "queue",
+    uploads_count: int = 0,
+    uploads_mb: float = 0.0,
     lang: str = "en"
 ) -> InlineKeyboardMarkup:
     """
-    Клавиатура меню /settings: системные настройки, безопасность, движок, язык, очистка файлов.
+    Клавиатура меню /settings: системные настройки, безопасность, очередь сообщений, движок, язык, очистка файлов.
     """
     builder = InlineKeyboardBuilder()
 
@@ -133,7 +134,13 @@ def build_system_settings_keyboard(
         InlineKeyboardButton(text=safety_text, callback_data="toggle_safety")
     )
 
-    # 2. Движок (CLI vs SDK)
+    # 2. Очередь сообщений (Queue vs Block)
+    queue_text = t("btn_queue_on", lang) if queue_mode == "queue" else t("btn_queue_off", lang)
+    builder.row(
+        InlineKeyboardButton(text=queue_text, callback_data="toggle_queue")
+    )
+
+    # 3. Движок (CLI vs SDK)
     if engine_mode == "cli":
         engine_text = t("btn_engine_cli", lang)
         next_mode = "sdk"
@@ -145,19 +152,19 @@ def build_system_settings_keyboard(
         InlineKeyboardButton(text=engine_text, callback_data=f"toggle_engine:{next_mode}")
     )
 
-    # 3. Переключение языка (Language)
+    # 4. Переключение языка (Language)
     lang_btn_text = "🌐 Language: English 🇬🇧" if lang == "en" else "🌐 Язык: Русский 🇷🇺"
     builder.row(
         InlineKeyboardButton(text=lang_btn_text, callback_data="toggle_language")
     )
 
-    # 4. Очистка временных файлов
+    # 5. Очистка временных файлов
     clean_btn_text = t("btn_clean_uploads", lang, count=uploads_count, mb=uploads_mb)
     builder.row(
         InlineKeyboardButton(text=clean_btn_text, callback_data="clean_uploads")
     )
 
-    # 5. Закрыть
+    # 6. Закрыть
     builder.row(InlineKeyboardButton(text=t("btn_close", lang), callback_data="settings_close"))
 
     return builder.as_markup()

@@ -49,11 +49,13 @@ def format_all_models_text(current_model: str, total_models: int, lang: str = "e
 def format_system_settings_text(
     safety_approval: bool,
     engine_mode: str,
-    uploads_count: int,
-    uploads_mb: float,
+    queue_mode: str = "queue",
+    uploads_count: int = 0,
+    uploads_mb: float = 0.0,
     lang: str = "en"
 ) -> str:
     safety_desc = t("safety_ask_desc" if safety_approval else "safety_auto_desc", lang)
+    queue_desc = t("queue_on_desc" if queue_mode == "queue" else "queue_off_desc", lang)
     engine_desc = t("engine_cli_desc" if engine_mode == "cli" else "engine_sdk_desc", lang)
     lang_name = "English 🇬🇧" if lang == "en" else "Русский 🇷🇺"
 
@@ -61,6 +63,7 @@ def format_system_settings_text(
         "settings_title",
         lang,
         safety_desc=safety_desc,
+        queue_desc=queue_desc,
         engine_desc=engine_desc,
         lang_name=lang_name,
         uploads_count=uploads_count,
@@ -91,6 +94,7 @@ async def cmd_settings(message: types.Message):
     kb = build_system_settings_keyboard(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language
@@ -98,6 +102,7 @@ async def cmd_settings(message: types.Message):
     text = format_system_settings_text(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language
@@ -115,6 +120,7 @@ async def cb_toggle_safety(callback: types.CallbackQuery):
     kb = build_system_settings_keyboard(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language
@@ -122,6 +128,7 @@ async def cb_toggle_safety(callback: types.CallbackQuery):
     text = format_system_settings_text(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language
@@ -136,6 +143,39 @@ async def cb_toggle_safety(callback: types.CallbackQuery):
     await callback.answer(f"Security: {state_str}")
 
 
+@router.callback_query(F.data == "toggle_queue")
+async def cb_toggle_queue(callback: types.CallbackQuery):
+    session = session_manager.get_session(callback.from_user.id)
+    session.queue_mode = "block" if session.queue_mode == "queue" else "queue"
+    session_manager.save_to_disk()
+
+    files_count, files_mb = get_uploads_stats()
+    kb = build_system_settings_keyboard(
+        safety_approval=session.safety_approval,
+        engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
+        uploads_count=files_count,
+        uploads_mb=files_mb,
+        lang=session.language
+    )
+    text = format_system_settings_text(
+        safety_approval=session.safety_approval,
+        engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
+        uploads_count=files_count,
+        uploads_mb=files_mb,
+        lang=session.language
+    )
+
+    try:
+        await callback.message.edit_text(text, reply_markup=kb, parse_mode="HTML")
+    except Exception:
+        pass
+
+    state_str = "ON (Queue)" if session.queue_mode == "queue" else "OFF (Block)"
+    await callback.answer(f"Queue: {state_str}")
+
+
 @router.callback_query(F.data == "toggle_language")
 async def cb_toggle_language(callback: types.CallbackQuery):
     session = session_manager.get_session(callback.from_user.id)
@@ -146,6 +186,7 @@ async def cb_toggle_language(callback: types.CallbackQuery):
     kb = build_system_settings_keyboard(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language
@@ -153,6 +194,7 @@ async def cb_toggle_language(callback: types.CallbackQuery):
     text = format_system_settings_text(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language
@@ -178,6 +220,7 @@ async def cb_toggle_engine(callback: types.CallbackQuery):
     kb = build_system_settings_keyboard(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language
@@ -185,6 +228,7 @@ async def cb_toggle_engine(callback: types.CallbackQuery):
     text = format_system_settings_text(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language
@@ -208,6 +252,7 @@ async def cb_clean_uploads(callback: types.CallbackQuery):
     kb = build_system_settings_keyboard(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language
@@ -215,6 +260,7 @@ async def cb_clean_uploads(callback: types.CallbackQuery):
     text = format_system_settings_text(
         safety_approval=session.safety_approval,
         engine_mode=session.engine_mode,
+        queue_mode=session.queue_mode,
         uploads_count=files_count,
         uploads_mb=files_mb,
         lang=session.language

@@ -82,6 +82,12 @@ antigravity-tg-bro/
    - Messages containing Markdown tables are finalized via `InputRichMessage(markdown=...)` (format "Статья" in Telegram Bot API).
    - If Rich Messages fail or are unsupported, a 3-tier fallback automatically transforms tables into responsive mobile Card Layout blocks (`<blockquote>`) in `src/bot/utils/formatter.py`, ensuring tables never break on mobile screens.
 
+9. **Message Queue & Sequential Worker**:
+   - Inbound prompts sent while the agent is executing are queued sequentially via `asyncio.Queue` when `session.queue_mode == "queue"` (toggled in `/settings`).
+   - The user is notified of queue position, and temporary status messages are automatically cleaned up when the turn begins.
+   - When `session.queue_mode == "block"`, new messages are rejected with an informative busy notice.
+   - Invoking `/stop` cancels the active turn, drains the user queue, and reports how many pending requests were cleared.
+
 ---
 
 ## 🛠️ Verification & Test Recipes

@@ -90,6 +90,7 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         "en": (
             "⚙️ <b>System Settings & Maintenance:</b>\n\n"
             "🛡 <b>Security Mode:</b>\n{safety_desc}\n\n"
+            "📥 <b>Message Queue:</b>\n{queue_desc}\n\n"
             "⚙️ <b>Execution Engine:</b>\n{engine_desc}\n\n"
             "🌐 <b>Language:</b> {lang_name}\n\n"
             "📁 <b>Temporary Uploads:</b>\n"
@@ -99,6 +100,7 @@ MESSAGES: Dict[str, Dict[str, str]] = {
         "ru": (
             "⚙️ <b>Системные Настройки & Обслуживание:</b>\n\n"
             "🛡 <b>Режим безопасности:</b>\n{safety_desc}\n\n"
+            "📥 <b>Очередь сообщений:</b>\n{queue_desc}\n\n"
             "⚙️ <b>Движок выполнения:</b>\n{engine_desc}\n\n"
             "🌐 <b>Язык интерфейса:</b> {lang_name}\n\n"
             "📁 <b>Временные загрузки (uploads):</b>\n"
@@ -113,6 +115,14 @@ MESSAGES: Dict[str, Dict[str, str]] = {
     "safety_auto_desc": {
         "en": "⚡ <b>DISABLED (Full Auto)</b> — Commands execute immediately without prompts.",
         "ru": "⚡ <b>ВЫКЛЮЧЕНА (Full Auto)</b> — все команды выполняются сразу без вопросов."
+    },
+    "queue_on_desc": {
+        "en": "⏳ <b>ENABLED (Queue)</b> — Incoming messages are queued and processed sequentially.",
+        "ru": "⏳ <b>ВКЛЮЧЕНА (Queue)</b> — входящие сообщения накапливаются в очереди и выполняются по порядку."
+    },
+    "queue_off_desc": {
+        "en": "🚫 <b>DISABLED (Block)</b> — Incoming messages are rejected while an agent task is active.",
+        "ru": "🚫 <b>ВЫКЛЮЧЕНА (Block)</b> — входящие сообщения отклоняются, пока агент выполняет задачу."
     },
     "engine_cli_desc": {
         "en": "🟣 <b>Antigravity CLI</b> <i>(Local Google account subscription)</i>",
@@ -129,6 +139,14 @@ MESSAGES: Dict[str, Dict[str, str]] = {
     "btn_safety_off": {
         "en": "🛡 Security: OFF (Full Auto) ⚡",
         "ru": "🛡 Защита: ВЫКЛ (Full Auto) ⚡"
+    },
+    "btn_queue_on": {
+        "en": "📥 Queue: ON (Queue) ⏳",
+        "ru": "📥 Очередь: ВКЛ (Queue) ⏳"
+    },
+    "btn_queue_off": {
+        "en": "📥 Queue: OFF (Block) 🚫",
+        "ru": "📥 Очередь: ВЫКЛ (Block) 🚫"
     },
     "btn_engine_cli": {
         "en": "🟣 Engine: CLI (Google Account) ⚡",
@@ -329,6 +347,18 @@ MESSAGES: Dict[str, Dict[str, str]] = {
     "task_stopped": {
         "en": "🛑 <b>Current task halted by user.</b>",
         "ru": "🛑 <b>Текущая задача остановлена пользователем.</b>"
+    },
+    "task_stopped_with_queue": {
+        "en": "🛑 <b>Current task halted by user.</b>\nCleared <b>{count}</b> pending request(s) from queue.",
+        "ru": "🛑 <b>Текущая задача остановлена пользователем.</b>\nОчищено <b>{count}</b> отложенных запросов из очереди."
+    },
+    "msg_queued": {
+        "en": "📥 <b>Message added to queue (position #{pos}).</b>\n<i>Will execute immediately once the current task completes.</i>",
+        "ru": "📥 <b>Запрос добавлен в очередь (позиция #{pos}).</b>\n<i>Выполню сразу после завершения текущей задачи.</i>"
+    },
+    "queue_full": {
+        "en": "⚠️ <b>Queue is full (max {limit} messages).</b>\nPlease wait for active tasks to complete before sending more.",
+        "ru": "⚠️ <b>Очередь сообщений переполнена (макс. {limit} запросов).</b>\nПожалуйста, дождитесь завершения текущих задач."
     },
     "task_nothing_to_stop": {
         "en": "ℹ️ No active task is currently executing.",

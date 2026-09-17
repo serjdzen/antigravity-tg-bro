@@ -9,6 +9,10 @@ from src.bot.utils.formatter import (
 from src.bot.utils.streamer import close_unclosed_html_tags
 from src.engine.models_loader import FEATURED_MODELS, get_model_emoji
 from src.config import Settings
+from src.engine.session_manager import UserSession
+from src.bot.keyboards.settings_kb import build_system_settings_keyboard
+from src.bot.handlers.settings import format_system_settings_text
+from src.bot.handlers.chat import _get_user_queue, QueuedPrompt, MAX_QUEUE_SIZE
 
 
 class TestOfflineComponents(unittest.TestCase):
@@ -80,6 +84,70 @@ class TestOfflineComponents(unittest.TestCase):
         self.assertIn("gemini-3.8-flash", model_ids)
         self.assertEqual(get_model_emoji("gemini-3.8-flash"), "⚡")
         self.assertEqual(get_model_emoji("gemini-3.8-flash-high"), "⚡")
+
+    def test_session_queue_mode(self):
+        s = UserSession(user_id=99999)
+        self.assertEqual(s.queue_mode, "queue")
+        s.queue_mode = "block"
+        self.assertEqual(s.queue_mode, "block")
+
+    def test_system_settings_keyboard_queue_toggle(self):
+        kb_queue = build_system_settings_keyboard(
+            safety_approval=True,
+            engine_mode="cli",
+            queue_mode="queue",
+            lang="en"
+        )
+        buttons = [b for row in kb_queue.inline_keyboard for b in row]
+        queue_btn = next((b for b in buttons if b.callback_data == "toggle_queue"), None)
+        self.assertIsNotNone(queue_btn)
+        self.assertIn("ON (Queue)", queue_btn.text)
+
+        kb_block = build_system_settings_keyboard(
+            safety_approval=True,
+            engine_mode="cli",
+            queue_mode="block",
+            lang="ru"
+        )
+        buttons_block = [b for row in kb_block.inline_keyboard for b in row]
+        queue_btn_block = next((b for b in buttons_block if b.callback_data == "toggle_queue"), None)
+        self.assertIsNotNone(queue_btn_block)
+        self.assertIn("ВЫКЛ (Block)", queue_btn_block.text)
+
+    def test_system_settings_text_queue(self):
+        text_queue_en = format_system_settings_text(
+            safety_approval=True,
+            engine_mode="cli",
+            queue_mode="queue",
+            lang="en"
+        )
+        self.assertIn("Message Queue:", text_queue_en)
+        self.assertIn("ENABLED (Queue)", text_queue_en)
+
+        text_block_ru = format_system_settings_text(
+            safety_approval=True,
+            engine_mode="cli",
+            queue_mode="block",
+            lang="ru"
+        )
+        self.assertIn("Очередь сообщений:", text_block_ru)
+        self.assertIn("ВЫКЛЮЧЕНА (Block)", text_block_ru)
+
+    def test_user_queue_operations(self):
+        test_uid = 88888
+        q = _get_user_queue(test_uid)
+        self.assertEqual(q.qsize(), 0)
+        item = QueuedPrompt(
+            chat_id=123,
+            user_id=test_uid,
+            bot=None,  # type: ignore
+            prompt_text="Test prompt"
+        )
+        q.put_nowait(item)
+        self.assertEqual(q.qsize(), 1)
+        popped = q.get_nowait()
+        self.assertEqual(popped.prompt_text, "Test prompt")
+        self.assertEqual(q.qsize(), 0)
 
 
 if __name__ == "__main__":
