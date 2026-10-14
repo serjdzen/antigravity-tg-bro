@@ -1,4 +1,4 @@
-from aiogram import Router, types
+from aiogram import Router, types, F
 from aiogram.filters import CommandStart, Command
 from src.engine.session_manager import session_manager
 from src.engine.uploads_manager import get_uploads_stats
@@ -55,3 +55,17 @@ async def cmd_status(message: types.Message):
     )
 
     await message.answer(text, parse_mode="HTML")
+
+
+@router.message(Command("quota", "limits"))
+@router.message(F.text.func(lambda text: bool(text and text.strip().casefold().rstrip("?!.,:;") in {
+    "квота", "квоты", "лимит", "лимиты", "quota", "limits"
+})))
+async def cmd_quota(message: types.Message):
+    from src.engine.quota_monitor import quota_monitor
+    session = session_manager.get_session(message.from_user.id)
+    report = quota_monitor.get_summary_report(lang=session.language)
+    try:
+        await message.answer(report, parse_mode="HTML")
+    except Exception:
+        await message.answer(report, parse_mode=None)

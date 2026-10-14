@@ -13,7 +13,7 @@ from src.engine.session_manager import session_manager
 from src.engine.antigravity_bridge import antigravity_bridge, EngineEvent
 from src.engine.voice_transcriber import voice_transcriber
 from src.engine.uploads_manager import ensure_uploads_dir
-from src.bot.utils.formatter import format_thought_block, format_tool_call_block
+from src.bot.utils.formatter import format_thought_block, format_tool_call_block, format_markdown_to_telegram_html
 from src.bot.utils.streamer import LiveStreamer
 from src.bot.locales import t
 
@@ -44,6 +44,7 @@ class QueuedPrompt:
     reply_to_message_id: Optional[int] = None
     force_override: bool = False
     notify_message_id: Optional[int] = None
+    existing_message_id: Optional[int] = None
 
 
 def _get_user_queue(user_id: int) -> asyncio.Queue:
@@ -122,7 +123,12 @@ async def _execute_single_prompt(item: QueuedPrompt):
     effective_override = force_override or (not session.safety_approval)
 
     async with session.lock:
-        streamer = LiveStreamer(bot=bot, chat_id=chat_id, reply_to_message_id=reply_to_message_id)
+        streamer = LiveStreamer(
+            bot=bot,
+            chat_id=chat_id,
+            reply_to_message_id=reply_to_message_id,
+            existing_message_id=item.existing_message_id
+        )
         await streamer.start()
 
         thought_blocks = []
@@ -147,11 +153,14 @@ async def _execute_single_prompt(item: QueuedPrompt):
                     effort=session.reasoning_effort,
                     conversation_id=active_chat.agy_conversation_id,
                     engine_mode=session.engine_mode,
-                    force_override=effective_override
+                    force_override=effective_override,
+                    context_summary=active_chat.context_summary
                 ):
                     if event.event_type == "conversation_id":
                         if event.content:
                             active_chat.agy_conversation_id = str(event.content)
+                            if active_chat.context_summary:
+                                active_chat.context_summary = None
                             session_manager.save_to_disk()
                     elif event.event_type == "thought":
                         if event.content:
@@ -190,6 +199,53 @@ async def _execute_single_prompt(item: QueuedPrompt):
             thought_blocks.append(f"❌ <b>{crit_lbl}:</b>\n<code>{str(e)}</code>")
 
         finally:
+            # Check context health and append discreet notice if bloated
+            if active_chat.agy_conversation_id and not was_cancelled and full_response_text:
+                transcript_path = (
+                    Path.home() / ".gemini" / "antigravity-cli" / "brain"
+                    / active_chat.agy_conversation_id / ".system_generated" / "logs" / "transcript.jsonl"
+                )
+                if transcript_path.exists():
+                    try:
+                        size_kb = transcript_path.stat().st_size / 1024
+                        if size_kb >= 2000 or active_chat.messages_count >= 80:
+                            size_mb = size_kb / 1024
+                            warn_tag = (
+                                f"\n\n---\n"
+                                f"🧹 _Session context is large ({active_chat.messages_count} msgs, {size_mb:.1f} MB)._\n"
+                                f"↳ _To compact with state preservation:_ /compact"
+                                if lang == "en" else
+                                f"\n\n---\n"
+                                f"🧹 _Контекст сессии велик ({active_chat.messages_count} сообщ., {size_mb:.1f} МБ)._\n"
+                                f"↳ _Для сжатия без потери сути:_ /compact"
+                            )
+                            streamer.accumulated_text += warn_tag
+                    except Exception:
+                        pass
+
+            # Check Antigravity 5-hour rolling quota and alert if remaining < 20%
+            if not was_cancelled and full_response_text:
+                try:
+                    from src.engine.quota_monitor import quota_monitor
+                    quota_alert = quota_monitor.check_quota_alert(
+                        current_model=session.current_model,
+                        threshold=0.20,
+                        lang=lang
+                    )
+                    if quota_alert:
+                        alert_tag = t(
+                            "quota_alert_footer",
+                            lang,
+                            percent=f"{quota_alert.percent_left:.1f}%",
+                            email=quota_alert.email,
+                            model=quota_alert.model_name,
+                            time_left=quota_alert.time_left_str,
+                            reset_time=quota_alert.reset_time_str
+                        )
+                        streamer.accumulated_text += alert_tag
+                except Exception as q_err:
+                    logger.debug(f"Quota alert check failed (ignored): {q_err}")
+
             extra_blocks = thought_blocks + tool_blocks
             complete_output = "".join(full_response_text)
 
@@ -269,7 +325,8 @@ async def _execute_prompt(
     bot: Bot,
     prompt_text: str,
     reply_to_message_id: Optional[int] = None,
-    force_override: bool = False
+    force_override: bool = False,
+    existing_message_id: Optional[int] = None
 ):
     """
     Entry point for all user prompts (text, audio, photos, documents).
@@ -324,7 +381,8 @@ async def _execute_prompt(
             prompt_text=prompt_text,
             reply_to_message_id=reply_to_message_id,
             force_override=force_override,
-            notify_message_id=notify_msg.message_id
+            notify_message_id=notify_msg.message_id,
+            existing_message_id=existing_message_id
         )
         await queue.put(queued_item)
         return
@@ -337,7 +395,8 @@ async def _execute_prompt(
         prompt_text=prompt_text,
         reply_to_message_id=reply_to_message_id,
         force_override=force_override,
-        notify_message_id=None
+        notify_message_id=None,
+        existing_message_id=existing_message_id
     )
     await queue.put(queued_item)
     worker_task = asyncio.create_task(_user_queue_worker(user_id))
@@ -503,6 +562,107 @@ async def handle_stop_command(message: types.Message, bot: Bot):
         await message.reply(t("task_nothing_to_stop", lang), parse_mode="HTML")
 
 
+@router.message(F.text.startswith("/compact"))
+async def handle_compact_command(message: types.Message, bot: Bot):
+    """
+    /compact [focus_instruction] command:
+    - Runs a native in-session summary using agy CLI on the existing conversation (effort: high).
+    - Preserves key goals, decisions, modified files, and pending tasks.
+    - Saves the summary to active_chat.context_summary for seamless injection into the new session.
+    - Safely archives the current conversation and resets agy_conversation_id.
+    - Preserves all project files and database records.
+    """
+    user_id = message.from_user.id
+    session = session_manager.get_session(user_id)
+    active_chat = session.get_active_chat()
+    lang = session.language
+
+    old_conv_id = active_chat.agy_conversation_id
+    if not old_conv_id:
+        msg = (
+            "Active chat is already clean (no previous CLI history)."
+            if lang == "en" else
+            "Активный чат уже чист (нет накопленной истории диалога)."
+        )
+        await message.reply(f"ℹ️ {msg}")
+        return
+
+    # Extract optional user focus instructions
+    text_parts = message.text.strip().split(maxsplit=1)
+    custom_focus = text_parts[1].strip() if len(text_parts) > 1 else ""
+
+    # Status message while running high-effort summary
+    status_msg = await message.reply(
+        "🧹 <i>Анализирую и сжимаю контекст сессии (effort: high)... Сохраняю ключевые договорённости.</i>"
+        if lang == "ru" else
+        "🧹 <i>Analyzing and compacting session context (effort: high)... Preserving key decisions.</i>",
+        parse_mode="HTML"
+    )
+
+    # 1. Native in-session summary generation via agy
+    summary_text = await antigravity_bridge.generate_conversation_summary(
+        conversation_id=old_conv_id,
+        project_dir=Path(active_chat.project_dir),
+        model_name=active_chat.model,
+        effort="high",
+        custom_focus=custom_focus
+    )
+
+    if not summary_text:
+        err_msg = (
+            "⚠️ <i>Failed to generate session summary via CLI. "
+            "Session was NOT compressed to prevent accidental context loss. Please try again.</i>"
+            if lang == "en" else
+            "⚠️ <i>Не удалось сгенерировать резюме через CLI. "
+            "Сессия НЕ была сброшена, чтобы не потерять контекст. Попробуйте еще раз.</i>"
+        )
+        await status_msg.edit_text(err_msg, parse_mode="HTML")
+        return
+
+    # 2. Check previous transcript size on host
+    transcript_path = (
+        Path.home() / ".gemini" / "antigravity-cli" / "brain"
+        / old_conv_id / ".system_generated" / "logs" / "transcript.jsonl"
+    )
+    prev_size_mb = 0.0
+    if transcript_path.exists():
+        try:
+            prev_size_mb = transcript_path.stat().st_size / (1024 * 1024)
+        except Exception:
+            pass
+
+    old_messages = active_chat.messages_count
+
+    # 3. Store summary and reset session ID
+    active_chat.context_summary = summary_text
+    active_chat.agy_conversation_id = None
+    active_chat.messages_count = 0
+    active_chat.updated_at = time.time()
+    session_manager.save_to_disk()
+
+    # Format summary preview (truncate if very long for Telegram message limit)
+    preview_summary = summary_text if len(summary_text) <= 1500 else summary_text[:1470] + "..."
+    formatted_summary = format_markdown_to_telegram_html(preview_summary)
+
+    notice = (
+        f"🧹 <b>Session context successfully compressed! (Stateful Handover)</b>\n\n"
+        f"• Archived session: <code>{old_conv_id[:8]}...</code> ({prev_size_mb:.2f} MB, {old_messages} msgs)\n"
+        f"• Clean conversation started for project: <code>{Path(active_chat.project_dir).name}</code>\n"
+        f"• Context summary will be automatically injected into your next message.\n\n"
+        f"📋 <b>Preserved Context Summary:</b>\n{formatted_summary}\n\n"
+        f"⚡ <i>Maximum agent speed restored without losing context!</i>"
+        if lang == "en" else
+        f"🧹 <b>Контекст сессии успешно сжат без потери сути! (Stateful Handover)</b>\n\n"
+        f"• Заархивирована прошлая сессия: <code>{old_conv_id[:8]}...</code> ({prev_size_mb:.2f} МБ, {old_messages} сообщ.)\n"
+        f"• Начат чистый контекст для проекта: <code>{Path(active_chat.project_dir).name}</code>\n"
+        f"• Выжимка сохранена и будет передана агенту в начале следующего запроса.\n\n"
+        f"📋 <b>Сохранённое резюме (Executive Briefing):</b>\n{formatted_summary}\n\n"
+        f"⚡ <i>Максимальная скорость ответа агента восстановлена!</i>"
+    )
+    await status_msg.edit_text(notice, parse_mode="HTML")
+
+
+
 @router.message(F.voice | F.audio)
 async def handle_voice_message(message: types.Message, bot: Bot):
     session = session_manager.get_session(message.from_user.id)
@@ -539,8 +699,10 @@ async def handle_voice_message(message: types.Message, bot: Bot):
             await status_msg.edit_text(f"⚠️ {err_text}")
             return
 
+        existing_msg_id = None
         try:
-            await bot.delete_message(chat_id=message.chat.id, message_id=status_msg.message_id)
+            await status_msg.edit_text("⚡ <i>Генерирую ответ...</i>", parse_mode="HTML")
+            existing_msg_id = status_msg.message_id
         except Exception:
             pass
 
@@ -550,7 +712,8 @@ async def handle_voice_message(message: types.Message, bot: Bot):
             bot=bot,
             prompt_text=transcribed_text,
             reply_to_message_id=message.message_id,
-            force_override=False
+            force_override=False,
+            existing_message_id=existing_msg_id
         )
 
     except Exception as e:

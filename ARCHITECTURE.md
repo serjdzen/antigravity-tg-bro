@@ -70,3 +70,12 @@ The bot bridges Telegram's asynchronous event loop with the local execution envi
 * **`data/sessions.json`**: Stores user chat trees, active directories, selected models, and thinking effort settings.
 * **Atomic Writes**: Uses temporary files (`.tmp`) and `os.replace` to prevent corrupted JSON writes in case of abrupt termination.
 * **Concurrency Lock**: `async with session.lock:` enforces single-turn execution per user, eliminating race conditions.
+
+---
+
+## 6. Context Management & Stateful Handover (/compact)
+
+* **Automatic Context Monitoring**: Monitors conversation transcript size and message count (`> 2.0 MB` or `> 80` messages). Displays an unobtrusive visual footer warning with a divider `───────────────` suggesting compaction.
+* **Stateful Handover Protocol**: `/compact` triggers a native in-session high-effort summarization (`agy --conversation <conv_id> --effort high -p "..."`). It generates a structured handover summary (current goal, architectural decisions, modified files, active state, and next steps) before switching to a fresh conversation ID.
+* **Seamless Context Injection**: The summary is injected into `<previous_context_summary>` on the first turn of the new session, ensuring 0% loss of continuity while shrinking transcript payload back to zero.
+* **Streamer Honesty**: Prevents misleading "done" completions on failed or empty agent runs, rendering an honest warning banner instead.

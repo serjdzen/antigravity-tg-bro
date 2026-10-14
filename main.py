@@ -21,6 +21,8 @@ async def setup_bot_commands(bot):
         BotCommand(command="project", description="📁 Workspace project explorer"),
         BotCommand(command="model", description="🧠 Switch model & thinking"),
         BotCommand(command="settings", description="⚙️ Settings, engine & language"),
+        BotCommand(command="compact", description="🧹 Compress & refresh context"),
+        BotCommand(command="quota", description="📊 5h Quota & Account Limits"),
         BotCommand(command="status", description="📊 Current session status"),
         BotCommand(command="help", description="❓ Feature manual & tips"),
     ]
@@ -30,6 +32,8 @@ async def setup_bot_commands(bot):
         BotCommand(command="project", description="📁 Выбрать проект на Mac"),
         BotCommand(command="model", description="🧠 Сменить модель & Thinking"),
         BotCommand(command="settings", description="⚙️ Настройки и обслуживание"),
+        BotCommand(command="compact", description="🧹 Сжать и обновить контекст"),
+        BotCommand(command="quota", description="📊 Лимиты и квоты Antigravity"),
         BotCommand(command="status", description="📊 Текущий статус"),
         BotCommand(command="help", description="❓ Справка по возможностям"),
     ]
@@ -48,6 +52,22 @@ async def setup_bot_commands(bot):
 
 async def main():
     logger.info("Starting Antigravity TG...")
+
+    # Auto-discover macOS system proxies into os.environ for seamless VPN operation
+    try:
+        import os, urllib.request
+        system_proxies = urllib.request.getproxies()
+        for proto in ("https", "http", "all"):
+            if proto in system_proxies and system_proxies[proto]:
+                pval = system_proxies[proto]
+                if not pval.startswith(("http://", "https://", "socks5://")):
+                    pval = f"http://{pval}"
+                os.environ.setdefault(f"{proto.upper()}_PROXY", pval)
+                os.environ.setdefault(f"{proto}_proxy", pval)
+        if any("proxy" in k.lower() for k in os.environ):
+            logger.info(f"System proxies auto-discovered and active: {system_proxies}")
+    except Exception as e:
+        logger.debug(f"Failed to auto-discover system proxies: {e}")
 
     # Startup Safety Guard: ensure deny rules are intact on disk
     from src.engine.antigravity_bridge import ensure_deny_integrity

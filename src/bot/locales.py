@@ -19,6 +19,8 @@ MESSAGES: Dict[str, Dict[str, str]] = {
             "📁 /project — Local workspace explorer\n"
             "🧠 /model — Model selection & Thinking Effort\n"
             "⚙️ /settings — Security, engine & language\n"
+            "🧹 /compact — Compress session context & refresh speed\n"
+            "📊 /quota — 5-hour limits & account status\n"
             "📊 /status — Current session overview\n"
             "❓ /help — Detailed manual\n\n"
             "🎙 <i>Tip: Send voice messages for instant Groq Whisper transcription, upload screenshots, or download files via <code>/get path/to/file</code>.</i>"
@@ -31,6 +33,8 @@ MESSAGES: Dict[str, Dict[str, str]] = {
             "📁 /project — Навигатор по папкам\n"
             "🧠 /model — Выбор модели и Thinking Effort\n"
             "⚙️ /settings — Безопасность, движок и язык\n"
+            "🧹 /compact — Сжатие контекста и ускорение агента\n"
+            "📊 /quota — 5-часовые лимиты и аккаунт\n"
             "📊 /status — Текущий статус сессии\n"
             "❓ /help — Подробная справка\n\n"
             "🎙 <i>Вы можете надиктовывать задачи голосовыми сообщениями, присылать скриншоты или скачивать файлы через <code>/get путь/к/файлу</code>.</i>"
@@ -41,6 +45,8 @@ MESSAGES: Dict[str, Dict[str, str]] = {
             "📖 <b>Antigravity TG Feature Guide:</b>\n\n"
             "• <b>💬 Dialog Branches:</b> /chats — create, switch, and rename conversation threads.\n"
             "• <b>📁 Project Navigator:</b> /project — browse and select local project folders.\n"
+            "• <b>🧹 Context Compaction:</b> /compact — safely archive bloated conversation and start clean thread.\n"
+            "• <b>📊 Quotas & Limits:</b> /quota — check remaining 5-hour limits and reset timers across models.\n"
             "• <b>🎙 Voice Control:</b> Send voice messages for instant transcription (~300ms) via Groq Whisper.\n"
             "• <b>📸 Vision & Screenshots:</b> Send UI designs or bug screenshots — Gemini analyzes them instantly.\n"
             "• <b>📥 File Downloader:</b> <code>/get path/to/file.ext</code> — directly download project files to Telegram.\n"
@@ -51,6 +57,8 @@ MESSAGES: Dict[str, Dict[str, str]] = {
             "📖 <b>Справка по возможностям Antigravity TG:</b>\n\n"
             "• <b>💬 Ветки диалогов:</b> /chats — создание новых веток, история и переименование.\n"
             "• <b>📁 Выбор проекта:</b> /project — проводник по папкам на компьютере.\n"
+            "• <b>🧹 Сжатие контекста:</b> /compact — безопасная архивация раздутой сессии и запуск чистого контекста.\n"
+            "• <b>📊 Лимиты и квоты:</b> /quota — проверка остатка 5-часовых лимитов и времени сброса.\n"
             "• <b>🎙 Голосовые задачи:</b> Отправляйте голосовые сообщения — мгновенная расшифровка через Groq Whisper.\n"
             "• <b>📸 Фото и скриншоты:</b> Отправьте скриншот ошибки или макет с подписью — модель Gemini сразу проанализирует изображение.\n"
             "• <b>📥 Скачивание файлов:</b> <code>/get path/to/file.ext</code> — бот пришлет файл из проекта в Telegram.\n"
@@ -397,6 +405,22 @@ MESSAGES: Dict[str, Dict[str, str]] = {
     "get_file_too_large": {
         "en": "⚠️ File is too large ({size_mb:.1f} MB). Telegram limit is 50 MB.",
         "ru": "⚠️ Файл слишком большой ({size_mb:.1f} MB). Лимит Telegram — 50 MB."
+    },
+    "quota_alert_footer": {
+        "en": (
+            "\n\n---\n"
+            "⚠️ **Antigravity 5h Quota Alert ({percent} left)!**\n"
+            "📧 **Account:** `{email}`\n"
+            "⏳ **Remaining:** {percent} ({model})\n"
+            "🔄 **Reset:** in {time_left} (at {reset_time})"
+        ),
+        "ru": (
+            "\n\n---\n"
+            "⚠️ **Лимит Antigravity подходит к концу ({percent})!**\n"
+            "📧 **Аккаунт:** `{email}`\n"
+            "⏳ **Осталось:** {percent} ({model})\n"
+            "🔄 **Обновление:** через {time_left} (в {reset_time})"
+        )
     }
 }
 

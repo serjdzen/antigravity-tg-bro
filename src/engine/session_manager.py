@@ -25,6 +25,7 @@ class ChatThread:
     created_at: float = field(default_factory=time.time)
     updated_at: float = field(default_factory=time.time)
     messages_count: int = 0
+    context_summary: Optional[str] = None
 
 
 @dataclass

@@ -1,4 +1,6 @@
 import unittest
+import asyncio
+from unittest.mock import AsyncMock, MagicMock
 from src.bot.locales import t
 from src.bot.utils.formatter import (
     format_thought_block,
@@ -6,7 +8,7 @@ from src.bot.utils.formatter import (
     format_markdown_to_telegram_html,
     split_message
 )
-from src.bot.utils.streamer import close_unclosed_html_tags
+from src.bot.utils.streamer import close_unclosed_html_tags, LiveStreamer
 from src.engine.models_loader import FEATURED_MODELS, get_model_emoji
 from src.config import Settings
 from src.engine.session_manager import UserSession
@@ -148,6 +150,141 @@ class TestOfflineComponents(unittest.TestCase):
         popped = q.get_nowait()
         self.assertEqual(popped.prompt_text, "Test prompt")
         self.assertEqual(q.qsize(), 0)
+
+    def test_streamer_with_existing_message_id(self):
+        """Verify LiveStreamer reuses existing_message_id without sending a duplicate start message."""
+        async def _run():
+            mock_bot = AsyncMock()
+            mock_bot.send_message = AsyncMock()
+            mock_bot.delete_message = AsyncMock()
+
+            streamer = LiveStreamer(
+                bot=mock_bot,
+                chat_id=123,
+                reply_to_message_id=456,
+                existing_message_id=789
+            )
+
+            # start() should NOT send a new message
+            await streamer.start()
+            mock_bot.send_message.assert_not_called()
+            self.assertEqual(streamer.message_id, 789)
+
+            # finalize() should delete the existing message and send a fresh response
+            streamer.accumulated_text = "Hello world"
+            new_sent = MagicMock()
+            new_sent.message_id = 999
+            mock_bot.send_message.return_value = new_sent
+
+            await streamer.finalize()
+            mock_bot.delete_message.assert_called_once_with(chat_id=123, message_id=789)
+            mock_bot.send_message.assert_called_once()
+            self.assertEqual(streamer.message_id, 999)
+
+        asyncio.run(_run())
+
+    def test_streamer_multi_chunk_delivery(self):
+        """Verify LiveStreamer splits large messages (>3900 chars), deletes placeholder once, and sets reply_markup on last chunk."""
+        async def _run():
+            mock_bot = AsyncMock()
+            mock_bot.send_message = AsyncMock()
+            mock_bot.delete_message = AsyncMock()
+
+            streamer = LiveStreamer(
+                bot=mock_bot,
+                chat_id=123,
+                reply_to_message_id=456,
+                existing_message_id=789
+            )
+
+            # Generate long text that splits into 2 chunks
+            long_para1 = "A" * 3000
+            long_para2 = "B" * 3000
+            streamer.accumulated_text = f"{long_para1}\n\n{long_para2}"
+
+            dummy_kb = MagicMock()
+            await streamer.finalize(reply_markup=dummy_kb)
+
+            # Placeholder must be deleted exactly once
+            mock_bot.delete_message.assert_called_once_with(chat_id=123, message_id=789)
+
+            # Must have sent at least 2 chunks
+            self.assertGreaterEqual(mock_bot.send_message.call_count, 2)
+
+            # First chunk must reply to reply_to_message_id (456)
+            first_call_kwargs = mock_bot.send_message.call_args_list[0].kwargs
+            self.assertEqual(first_call_kwargs.get("reply_to_message_id"), 456)
+            self.assertIsNone(first_call_kwargs.get("reply_markup"))
+
+            # Last chunk must have the reply_markup and no reply_to_message_id
+            last_call_kwargs = mock_bot.send_message.call_args_list[-1].kwargs
+            self.assertEqual(last_call_kwargs.get("reply_markup"), dummy_kb)
+            self.assertIsNone(last_call_kwargs.get("reply_to_message_id"))
+
+        asyncio.run(_run())
+
+    def test_handle_voice_message_seamless_transition(self):
+        """Verify handle_voice_message in-place edits status_msg to 'Генерирую ответ...' and passes existing_message_id."""
+        async def _run():
+            from unittest.mock import patch
+            from src.bot.handlers.chat import handle_voice_message
+            from src.engine.voice_transcriber import voice_transcriber
+
+            mock_bot = AsyncMock()
+            mock_bot.download = AsyncMock()
+
+            mock_status_msg = AsyncMock()
+            mock_status_msg.message_id = 555
+            mock_status_msg.edit_text = AsyncMock()
+
+            mock_msg = AsyncMock()
+            mock_msg.voice = MagicMock()
+            mock_msg.voice.file_id = "voice_file_123"
+            mock_msg.from_user = MagicMock()
+            mock_msg.from_user.id = 12345
+            mock_msg.chat = MagicMock()
+            mock_msg.chat.id = 67890
+            mock_msg.message_id = 111
+            mock_msg.reply = AsyncMock(return_value=mock_status_msg)
+
+            with patch.object(voice_transcriber, "api_key", "dummy_groq_key"), \
+                 patch("src.bot.handlers.chat.voice_transcriber.transcribe_audio_bytes", AsyncMock(return_value="Протестируй бота")), \
+                 patch("src.bot.handlers.chat._execute_prompt", AsyncMock()) as mock_exec:
+
+                await handle_voice_message(mock_msg, mock_bot)
+
+                # 1. Sent initial "Расшифровываю голос..."
+                mock_msg.reply.assert_called_once()
+
+                # 2. In-place edited into "Генерирую ответ..."
+                mock_status_msg.edit_text.assert_called_once()
+                edit_call_args = mock_status_msg.edit_text.call_args
+                self.assertIn("Генерирую ответ...", edit_call_args[0][0])
+
+                # 3. Passed existing_message_id=555 to _execute_prompt
+                mock_exec.assert_called_once()
+                exec_kwargs = mock_exec.call_args.kwargs
+                self.assertEqual(exec_kwargs.get("existing_message_id"), 555)
+                self.assertEqual(exec_kwargs.get("prompt_text"), "Протестируй бота")
+                self.assertEqual(exec_kwargs.get("reply_to_message_id"), 111)
+
+    def test_get_subprocess_env_injects_system_proxies(self):
+        """Verify get_subprocess_env dynamically discovers and normalizes macOS system proxies."""
+        from unittest.mock import patch
+        from src.engine.antigravity_bridge import get_subprocess_env
+
+        mock_proxies = {
+            "https": "http://127.0.0.1:51367",
+            "http": "127.0.0.1:51367"
+        }
+
+        with patch("urllib.request.getproxies", return_value=mock_proxies):
+            env = get_subprocess_env()
+            self.assertEqual(env.get("HTTPS_PROXY"), "http://127.0.0.1:51367")
+            self.assertEqual(env.get("https_proxy"), "http://127.0.0.1:51367")
+            # Should normalize missing schema to http://
+            self.assertEqual(env.get("HTTP_PROXY"), "http://127.0.0.1:51367")
+            self.assertEqual(env.get("http_proxy"), "http://127.0.0.1:51367")
 
 
 if __name__ == "__main__":

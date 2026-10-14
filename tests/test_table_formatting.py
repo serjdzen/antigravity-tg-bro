@@ -75,48 +75,32 @@ class TestTableFormatting(unittest.IsolatedAsyncioTestCase):
 
     async def test_streamer_finalize_rich_message_success(self):
         bot = MagicMock()
-        bot.edit_message_text = AsyncMock()
-        streamer = LiveStreamer(bot=bot, chat_id=12345)
-        streamer.message_id = 999
-        streamer.accumulated_text = "| A | B |\n| --- | --- |\n| 1 | 2 |"
-
-        await streamer.finalize()
-
-        bot.edit_message_text.assert_called_once()
-        call_kwargs = bot.edit_message_text.call_args.kwargs
-        self.assertIn("rich_message", call_kwargs)
-        self.assertIsInstance(call_kwargs["rich_message"], InputRichMessage)
-        self.assertIn("| A | B |", call_kwargs["rich_message"].markdown)
-
-    async def test_streamer_finalize_rich_message_fallback_to_send(self):
-        bot = MagicMock()
-        # edit fails with BadRequest (e.g. converting regular to rich disallowed)
-        bot.edit_message_text = AsyncMock(side_effect=TelegramBadRequest(method=MagicMock(), message="Cannot convert"))
         bot.delete_message = AsyncMock()
         new_msg = MagicMock()
         new_msg.message_id = 1000
         bot.send_rich_message = AsyncMock(return_value=new_msg)
-
-        streamer = LiveStreamer(bot=bot, chat_id=12345)
+        streamer = LiveStreamer(bot=bot, chat_id=12345, reply_to_message_id=456)
         streamer.message_id = 999
         streamer.accumulated_text = "| A | B |\n| --- | --- |\n| 1 | 2 |"
 
         await streamer.finalize()
 
-        bot.edit_message_text.assert_called_once()
         bot.delete_message.assert_called_once_with(chat_id=12345, message_id=999)
         bot.send_rich_message.assert_called_once()
+        call_kwargs = bot.send_rich_message.call_args.kwargs
+        self.assertIn("rich_message", call_kwargs)
+        self.assertIsInstance(call_kwargs["rich_message"], InputRichMessage)
+        self.assertIn("| A | B |", call_kwargs["rich_message"].markdown)
+        self.assertIsNotNone(call_kwargs.get("reply_parameters"))
+        self.assertEqual(call_kwargs["reply_parameters"].message_id, 456)
         self.assertEqual(streamer.message_id, 1000)
 
-    async def test_streamer_finalize_rich_message_full_fallback_to_card_html(self):
+    async def test_streamer_finalize_rich_message_fallback_to_edit(self):
         bot = MagicMock()
-        # Both rich message attempts fail
-        bot.edit_message_text = AsyncMock(side_effect=[
-            TelegramBadRequest(method=MagicMock(), message="Cannot convert"),
-            MagicMock() # Second call (Card Layout HTML fallback edit)
-        ])
+        # send_rich_message fails, falls back to edit_message_text with rich_message
+        bot.send_rich_message = AsyncMock(side_effect=TelegramBadRequest(method=MagicMock(), message="send_rich not allowed"))
+        bot.edit_message_text = AsyncMock()
         bot.delete_message = AsyncMock()
-        bot.send_rich_message = AsyncMock(side_effect=TelegramBadRequest(method=MagicMock(), message="Not supported"))
 
         streamer = LiveStreamer(bot=bot, chat_id=12345)
         streamer.message_id = 999
@@ -124,11 +108,37 @@ class TestTableFormatting(unittest.IsolatedAsyncioTestCase):
 
         await streamer.finalize()
 
-        # Should fall back to regular HTML edit with Card Layout
-        self.assertEqual(bot.edit_message_text.call_count, 2)
-        second_call = bot.edit_message_text.call_args_list[1].kwargs
-        self.assertEqual(second_call.get("parse_mode"), "HTML")
-        self.assertIn("<blockquote>", second_call.get("text"))
+        bot.send_rich_message.assert_called_once()
+        bot.edit_message_text.assert_called_once()
+        call_kwargs = bot.edit_message_text.call_args.kwargs
+        self.assertIn("rich_message", call_kwargs)
+        self.assertIsInstance(call_kwargs["rich_message"], InputRichMessage)
+        self.assertEqual(call_kwargs.get("message_id"), 999)
+        bot.delete_message.assert_not_called()
+
+    async def test_streamer_finalize_rich_message_fallback_to_card_html(self):
+        bot = MagicMock()
+        bot.delete_message = AsyncMock()
+        bot.send_rich_message = AsyncMock(side_effect=TelegramBadRequest(method=MagicMock(), message="Not supported"))
+        bot.edit_message_text = AsyncMock(side_effect=TelegramBadRequest(method=MagicMock(), message="Cannot edit"))
+        new_msg = MagicMock()
+        new_msg.message_id = 1001
+        bot.send_message = AsyncMock(return_value=new_msg)
+
+        streamer = LiveStreamer(bot=bot, chat_id=12345)
+        streamer.message_id = 999
+        streamer.accumulated_text = "| A | B |\n| --- | --- |\n| 1 | 2 |"
+
+        await streamer.finalize()
+
+        bot.send_rich_message.assert_called_once()
+        bot.edit_message_text.assert_called_once()
+        bot.delete_message.assert_called_once_with(chat_id=12345, message_id=999)
+        bot.send_message.assert_called_once()
+        call_kwargs = bot.send_message.call_args.kwargs
+        self.assertEqual(call_kwargs.get("parse_mode"), "HTML")
+        self.assertIn("<blockquote>", call_kwargs.get("text"))
+        self.assertEqual(streamer.message_id, 1001)
 
 
 if __name__ == "__main__":

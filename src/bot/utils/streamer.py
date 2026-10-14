@@ -4,7 +4,7 @@ import logging
 import time
 from typing import List, Optional
 from aiogram import Bot, types
-from aiogram.types import InputRichMessage
+from aiogram.types import InputRichMessage, ReplyParameters
 from src.bot.utils.formatter import (
     format_markdown_to_telegram_html,
     split_message,
@@ -53,23 +53,30 @@ def close_unclosed_html_tags(html_snippet: str) -> str:
 
 class LiveStreamer:
     """
-    Плавный потоковый стример сообщений в Telegram:
-    - Создает сообщение-заполнитель на месте.
-    - В реальном времени плавно обновляет текст в том же сообщении (edit_message_text).
-    - Исключает любые визуальные скачки, дергания вниз и ошибки парсинга незакрытых тегов.
+    Индикатор генерации и доставки сообщений в Telegram:
+    - Создает сервисное сообщение-индикатор (⚡ Генерирую ответ...).
+    - Во время генерации держит компактный статус (без спама промежуточным текстом).
+    - При завершении удаляет индикатор и отправляет чистый ответ новым сообщением.
+    - Гарантирует появление Push-уведомления и корректный таймстемп в Telegram.
     """
-    def __init__(self, bot: Bot, chat_id: int, reply_to_message_id: Optional[int] = None):
+    def __init__(
+        self,
+        bot: Bot,
+        chat_id: int,
+        reply_to_message_id: Optional[int] = None,
+        existing_message_id: Optional[int] = None
+    ):
         self.bot = bot
         self.chat_id = chat_id
         self.reply_to_message_id = reply_to_message_id
-        self.message_id: Optional[int] = None
+        self.message_id: Optional[int] = existing_message_id
         self.accumulated_text = ""
-        self.last_edit_time = 0.0
-        self.last_sent_text = ""
         self.is_finalized = False
-        self._edit_lock = asyncio.Lock()
 
     async def start(self):
+        if self.message_id:
+            return
+
         try:
             msg = await self.bot.send_message(
                 chat_id=self.chat_id,
@@ -78,48 +85,11 @@ class LiveStreamer:
                 parse_mode="HTML"
             )
             self.message_id = msg.message_id
-            self.last_sent_text = msg.text
-            self.last_edit_time = time.time()
         except Exception as e:
             logger.warning(f"Не удалось отправить начальное сообщение стримера: {e}")
 
     async def update_text(self, new_chunk: str):
         self.accumulated_text += new_chunk
-        now = time.time()
-
-        # Троттлинг: редактируем сообщение не чаще одного раза в 1.4 секунды
-        if self.message_id and not self.is_finalized and (now - self.last_edit_time >= 1.4):
-            async with self._edit_lock:
-                formatted_preview = format_markdown_to_telegram_html(self.accumulated_text.strip())
-                if formatted_preview and formatted_preview != self.last_sent_text:
-                    # Ограничиваем превью лимитом сообщения и гарантированно закрываем теги
-                    raw_cut = formatted_preview[:3800]
-                    safe_preview = close_unclosed_html_tags(raw_cut)
-                    
-                    try:
-                        await self.bot.edit_message_text(
-                            chat_id=self.chat_id,
-                            message_id=self.message_id,
-                            text=safe_preview + " ▌",
-                            parse_mode="HTML"
-                        )
-                        self.last_sent_text = formatted_preview
-                        self.last_edit_time = now
-                    except Exception as e:
-                        err_str = str(e).lower()
-                        if "message is not modified" not in err_str:
-                            logger.debug(f"Ошибка инлайн-редактирования стрима: {e}, fallback на plain-text")
-                            try:
-                                clean_text = re.sub(r"<[^>]+>", "", raw_cut)
-                                await self.bot.edit_message_text(
-                                    chat_id=self.chat_id,
-                                    message_id=self.message_id,
-                                    text=clean_text + " ▌"
-                                )
-                                self.last_sent_text = formatted_preview
-                                self.last_edit_time = now
-                            except Exception:
-                                pass
 
     async def finalize(
         self,
@@ -128,7 +98,7 @@ class LiveStreamer:
     ):
         self.is_finalized = True
 
-        # Check if accumulated text contains Markdown tables
+        # 1. Проверяем наличие Markdown-таблиц для отправки формата «Статья» (Rich Message)
         if has_markdown_table(self.accumulated_text):
             full_md_parts = []
             if extra_blocks:
@@ -138,11 +108,35 @@ class LiveStreamer:
             if self.accumulated_text.strip():
                 full_md_parts.append(self.accumulated_text.strip())
             elif not extra_blocks:
-                full_md_parts.append("✅ Задача выполнена.")
+                full_md_parts.append("⚠️ _Ответ от агента пуст или был прерван._")
 
             rich_content = "\n\n".join(full_md_parts)
+            reply_params = (
+                ReplyParameters(message_id=self.reply_to_message_id)
+                if self.reply_to_message_id
+                else None
+            )
 
-            # Attempt 1: In-place edit into Rich Message ("Статья")
+            # Attempt 1: Отправляем новое сообщение формата «Статья» (Rich Message) и удаляем плейсхолдер
+            try:
+                msg = await self.bot.send_rich_message(
+                    chat_id=self.chat_id,
+                    rich_message=InputRichMessage(markdown=rich_content),
+                    reply_parameters=reply_params,
+                    reply_markup=reply_markup
+                )
+                placeholder_id = self.message_id
+                self.message_id = msg.message_id
+                if placeholder_id:
+                    try:
+                        await self.bot.delete_message(chat_id=self.chat_id, message_id=placeholder_id)
+                    except Exception:
+                        pass
+                return
+            except Exception as e:
+                logger.info(f"send_rich_message не удался ({e}), пробуем edit_message_text с rich_message...")
+
+            # Attempt 2: Редактируем плейсхолдер на месте в формат «Статья» (нативная таблица)
             if self.message_id:
                 try:
                     await self.bot.edit_message_text(
@@ -153,25 +147,16 @@ class LiveStreamer:
                     )
                     return
                 except Exception as e:
-                    logger.info(f"edit_message_text с rich_message отклонен ({e}), пробуем send_rich_message...")
+                    logger.warning(f"edit_message_text с rich_message отклонен ({e}), fallback на Card Layout HTML...")
 
-            # Attempt 2: Send fresh Rich Message and delete placeholder on success
+        # 2. Удаляем временное сервисное сообщение-индикатор (для обычных сообщений или Card Layout fallback)
+        placeholder_id = self.message_id
+        self.message_id = None
+        if placeholder_id:
             try:
-                msg = await self.bot.send_rich_message(
-                    chat_id=self.chat_id,
-                    rich_message=InputRichMessage(markdown=rich_content),
-                    reply_to_message_id=self.reply_to_message_id,
-                    reply_markup=reply_markup
-                )
-                if self.message_id:
-                    try:
-                        await self.bot.delete_message(chat_id=self.chat_id, message_id=self.message_id)
-                    except Exception:
-                        pass
-                self.message_id = msg.message_id
-                return
+                await self.bot.delete_message(chat_id=self.chat_id, message_id=placeholder_id)
             except Exception as e:
-                logger.warning(f"send_rich_message завершился с ошибкой ({e}), fallback на Card Layout HTML...")
+                logger.debug(f"Не удалось удалить плейсхолдер {placeholder_id}: {e}")
 
         full_html_parts = []
 
@@ -186,7 +171,7 @@ class LiveStreamer:
             formatted_body = format_markdown_to_telegram_html(self.accumulated_text.strip(), convert_tables=True)
             full_html_parts.append(formatted_body)
         elif not extra_blocks:
-            full_html_parts.append("<i>✅ Задача выполнена.</i>")
+            full_html_parts.append("⚠️ <i>Ответ от агента пуст или был прерван. Если выполнялась долгая операция, проверьте статус файлов или отправьте уточняющий запрос.</i>")
 
         combined_text = "\n\n".join(full_html_parts)
         chunks = split_message(combined_text, max_chars=3900)
@@ -194,55 +179,34 @@ class LiveStreamer:
         if not chunks:
             chunks = ["<i>✅ Ответ получен.</i>"]
 
-        # Редактируем первое сообщение на месте (без прыжков и курсора!)
-        first_chunk = chunks[0]
-        first_kb = reply_markup if len(chunks) == 1 else None
-
-        if self.message_id:
-            try:
-                await self.bot.edit_message_text(
-                    chat_id=self.chat_id,
-                    message_id=self.message_id,
-                    text=first_chunk,
-                    reply_markup=first_kb,
-                    parse_mode="HTML"
-                )
-            except Exception as e:
-                logger.warning(f"Ошибка финального HTML редактирования ({e}), fallback на чистый текст...")
-                clean_chunk = re.sub(r"<[^>]+>", "", first_chunk)
-                try:
-                    await self.bot.edit_message_text(
-                        chat_id=self.chat_id,
-                        message_id=self.message_id,
-                        text=clean_chunk,
-                        reply_markup=first_kb
-                    )
-                except Exception:
-                    pass
-        else:
-            await self.bot.send_message(
-                chat_id=self.chat_id,
-                text=first_chunk,
-                reply_to_message_id=self.reply_to_message_id,
-                reply_markup=first_kb,
-                parse_mode="HTML"
-            )
-
-        # Если текст превысил лимит, отправляем оставшиеся части
-        for idx, chunk in enumerate(chunks[1:]):
-            is_last = (idx == len(chunks[1:]) - 1)
+        # Отправляем части сообщения как новые входящие сообщения
+        for idx, chunk in enumerate(chunks):
+            is_first = (idx == 0)
+            is_last = (idx == len(chunks) - 1)
             kb_for_chunk = reply_markup if is_last else None
+            reply_to = self.reply_to_message_id if is_first else None
+
+            sent_msg = None
             try:
-                await self.bot.send_message(
+                sent_msg = await self.bot.send_message(
                     chat_id=self.chat_id,
                     text=chunk,
+                    reply_to_message_id=reply_to,
                     reply_markup=kb_for_chunk,
                     parse_mode="HTML"
                 )
-            except Exception:
+            except Exception as e:
+                logger.warning(f"Ошибка отправки HTML ({e}), fallback на чистый текст...")
                 clean_chunk = re.sub(r"<[^>]+>", "", chunk)
-                await self.bot.send_message(
-                    chat_id=self.chat_id,
-                    text=clean_chunk,
-                    reply_markup=kb_for_chunk
-                )
+                try:
+                    sent_msg = await self.bot.send_message(
+                        chat_id=self.chat_id,
+                        text=clean_chunk,
+                        reply_to_message_id=reply_to,
+                        reply_markup=kb_for_chunk
+                    )
+                except Exception as send_err:
+                    logger.error(f"Не удалось отправить сообщение: {send_err}")
+
+            if is_first and sent_msg:
+                self.message_id = sent_msg.message_id

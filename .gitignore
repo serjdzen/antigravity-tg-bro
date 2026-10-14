@@ -19,6 +19,8 @@ env/
 
 # Runtime Data and Sessions (Contains user session history & private data)
 data/sessions.json
+data/transcripts/*
+downloads/*
 data/uploads/*
 !data/uploads/.gitkeep
 !data/whisper_prompt.txt

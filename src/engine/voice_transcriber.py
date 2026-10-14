@@ -8,7 +8,7 @@ from src.config import settings
 logger = logging.getLogger(__name__)
 
 GROQ_TRANSCRIPTION_URL = "https://api.groq.com/openai/v1/audio/transcriptions"
-GROQ_WHISPER_MODEL = "whisper-large-v3-turbo"
+GROQ_WHISPER_MODEL = "whisper-large-v3"
 PROMPT_VOCABULARY_FILE = Path(__file__).resolve().parent.parent.parent / "data" / "whisper_prompt.txt"
 
 

@@ -71,6 +71,28 @@ def get_bot_agent_rules() -> str:
     return ""
 
 
+def get_subprocess_env() -> Dict[str, str]:
+    """
+    Формирует изолированное окружение для подпроцесса agy CLI с автоматическим
+    подхватом системных прокси macOS (urllib.request.getproxies()), обеспечивая
+    бесперебойную работу через активный VPN-туннель.
+    """
+    env = os.environ.copy()
+    try:
+        import urllib.request
+        system_proxies = urllib.request.getproxies()
+        for proto in ("https", "http", "all"):
+            if proto in system_proxies and system_proxies[proto]:
+                proxy_val = system_proxies[proto]
+                if not proxy_val.startswith(("http://", "https://", "socks5://")):
+                    proxy_val = f"http://{proxy_val}"
+                env[f"{proto.upper()}_PROXY"] = proxy_val
+                env[f"{proto}_proxy"] = proxy_val
+    except Exception as e:
+        logger.debug(f"Не удалось получить системные прокси: {e}")
+    return env
+
+
 @dataclass
 class EngineEvent:
     event_type: str  # "conversation_id" | "thought" | "tool_call" | "token" | "error" | "done"
@@ -181,7 +203,8 @@ class AntigravityBridge:
         effort: str = "low",
         conversation_id: Optional[str] = None,
         engine_mode: str = "cli",
-        force_override: bool = False
+        force_override: bool = False,
+        context_summary: Optional[str] = None
     ) -> AsyncGenerator[EngineEvent, None]:
         """
         Универсальный стриминг с непрерывной памятью сессий и контролем подтверждений:
@@ -197,7 +220,8 @@ class AntigravityBridge:
                 model_name=model_name,
                 effort=effort,
                 conversation_id=conversation_id,
-                force_override=force_override
+                force_override=force_override,
+                context_summary=context_summary
             ):
                 yield ev
         else:
@@ -209,6 +233,76 @@ class AntigravityBridge:
             ):
                 yield ev
 
+    async def generate_conversation_summary(
+        self,
+        conversation_id: str,
+        project_dir: Path,
+        model_name: Optional[str] = None,
+        effort: str = "high",
+        custom_focus: str = "",
+        timeout_seconds: int = 90
+    ) -> Optional[str]:
+        """
+        Генерирует нативное структурированное резюме сессии через agy CLI (Stateful Handover).
+        Использует effort: high, чтобы модель вдумчиво выделила все ключевые нюансы и решения без потери контекста.
+        """
+        clean_effort = effort if effort in ["low", "medium", "high"] else "high"
+        summary_prompt = (
+            "Сформируй лаконичное, но ёмкое структурированное резюме (Executive Briefing) нашей текущей сессии "
+            "для бесшовной передачи следующему агенту в чистый контекст (Stateful Handover). "
+            "Не вызывай никаких инструментов, верни только готовый текст резюме.\n\n"
+            "Структура резюме:\n"
+            "### 🎯 Активная цель и текущий статус\n"
+            "### 📝 Принятые решения, правила и договорённости\n"
+            "### 📁 Ключевые затронутые файлы и данные\n"
+            "### ⏳ На чём конкретно остановились (Следующие шаги)\n"
+        )
+        if custom_focus:
+            summary_prompt += f"\nДополнительный приоритетный фокус от пользователя: {custom_focus}\n"
+
+        cmd = [
+            AGY_CLI_PATH,
+            "--add-dir", str(project_dir),
+            "--conversation", conversation_id,
+            "-p", summary_prompt,
+            "--effort", clean_effort,
+            "--output-format", "text",
+            "--dangerously-skip-permissions"
+        ]
+
+        if model_name:
+            if "3.8" in model_name:
+                cmd.extend(["--model", "gemini-3.8-flash"])
+            elif "3.7" in model_name:
+                cmd.extend(["--model", "gemini-3.7-flash"])
+            elif "3.1" in model_name or "pro" in model_name.lower():
+                cmd.extend(["--model", "gemini-3.1-pro"])
+            elif "claude" in model_name.lower():
+                cmd.extend(["--model", model_name])
+            elif "flash" in model_name.lower():
+                cmd.extend(["--model", "gemini-3.8-flash"])
+
+        try:
+            logger.info(f"Запуск генерации резюме для сессии {conversation_id} (effort: {clean_effort})...")
+            proc = await asyncio.create_subprocess_exec(
+                *cmd,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+                env=get_subprocess_env()
+            )
+            stdout_bytes, stderr_bytes = await asyncio.wait_for(proc.communicate(), timeout=timeout_seconds)
+            summary_text = stdout_bytes.decode("utf-8", errors="replace").strip()
+            if summary_text:
+                logger.info(f"Резюме для сессии {conversation_id} успешно сгенерировано ({len(summary_text)} символов).")
+                return summary_text
+            else:
+                err_text = stderr_bytes.decode("utf-8", errors="replace").strip()
+                logger.warning(f"Команда agy вернула пустой вывод резюме: {err_text}")
+                return None
+        except Exception as exc:
+            logger.error(f"Ошибка при нативной генерации резюме сессии: {exc}")
+            return None
+
     async def _stream_cli_chat(
         self,
         user_id: int,
@@ -217,7 +311,8 @@ class AntigravityBridge:
         model_name: Optional[str] = None,
         effort: str = "low",
         conversation_id: Optional[str] = None,
-        force_override: bool = False
+        force_override: bool = False,
+        context_summary: Optional[str] = None
     ) -> AsyncGenerator[EngineEvent, None]:
         clean_effort = effort if effort in ["low", "medium", "high"] else "low"
         logger.info(
@@ -232,6 +327,17 @@ class AntigravityBridge:
         effective_prompt = prompt
         if bot_rules:
             effective_prompt = f"<system_invariants>\n{bot_rules}\n</system_invariants>\n\n{prompt}"
+
+        # Stateful Handover: если стартует чистая сессия и есть сохранённое резюме, инжектируем его
+        if not conversation_id and context_summary:
+            effective_prompt = (
+                f"<previous_context_summary>\n"
+                f"Это сжатое резюме предыдущей сессии в этом проекте (Stateful Handover). "
+                f"Учитывай его как исходный контекст проекта и текущих договорённостей:\n\n"
+                f"{context_summary}\n"
+                f"</previous_context_summary>\n\n"
+                f"{effective_prompt}"
+            )
 
         cmd = [
             AGY_CLI_PATH,
@@ -267,7 +373,8 @@ class AntigravityBridge:
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                     cwd=str(project_dir),
-                    start_new_session=True
+                    start_new_session=True,
+                    env=get_subprocess_env()
                 )
                 self._active_agents[user_id] = process
 
@@ -341,6 +448,7 @@ class AntigravityBridge:
                         err_bytes = await asyncio.wait_for(process.stderr.read(), timeout=1.0)
                         err_msg = err_bytes.decode(errors="replace").strip()
                         if err_msg:
+                            logger.error(f"agy CLI завершился с кодом {process.returncode}: {err_msg}")
                             yield EngineEvent(event_type="error", content=err_msg)
                     except Exception:
                         pass

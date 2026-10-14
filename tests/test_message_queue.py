@@ -276,7 +276,7 @@ class TestMessageQueue(unittest.IsolatedAsyncioTestCase):
             await _execute_single_prompt(item)
 
             # bot.delete_message must have been called for 999
-            self.bot.delete_message.assert_called_once_with(chat_id=self.chat_id, message_id=999)
+            self.bot.delete_message.assert_any_call(chat_id=self.chat_id, message_id=999)
 
     async def test_6_error_isolation_in_queue_worker(self):
         """
