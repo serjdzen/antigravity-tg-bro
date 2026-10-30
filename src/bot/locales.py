@@ -421,6 +421,18 @@ MESSAGES: Dict[str, Dict[str, str]] = {
             "⏳ **Осталось:** {percent} ({model})\n"
             "🔄 **Обновление:** через {time_left} (в {reset_time})"
         )
+    },
+    "media_download_failed": {
+        "en": "⚠️ <b>Media Download Failed:</b>\nTelegram network connection timed out. Please try sending the file again.",
+        "ru": "⚠️ <b>Не удалось загрузить медиафайл:</b>\nТаймаут соединения с серверами Telegram. Пожалуйста, отправьте файл ещё раз."
+    },
+    "turn_extended_network_lag": {
+        "en": "⏳ <i>Network response is slow, waiting for services/MCP... (+{mins}m extended)</i>",
+        "ru": "⏳ <i>Ожидание ответа затягивается из-за медленного отклика сервисов/сети (+{mins} мин)...</i>"
+    },
+    "turn_watchdog_timeout_extended": {
+        "en": "Task exceeded maximum runtime limit ({mins} min adaptive watchdog timeout)",
+        "ru": "Превышен максимальный лимит времени задачи (адаптивный таймаут {mins} мин)"
     }
 }
 

@@ -88,6 +88,10 @@ antigravity-tg-bro/
    - When `session.queue_mode == "block"`, new messages are rejected with an informative busy notice.
    - Invoking `/stop` cancels the active turn, drains the user queue, and reports how many pending requests were cleared.
 
+10. **Adaptive Turn Watchdog & Resilient Media Downloads**:
+   - Media downloads (`photo`, `document`, `voice`, `media_group`) run through `_download_media_with_retry` (up to 3 attempts, 2s backoff, buffer rewinds) filtering strictly transient network/SSL errors, notifying users explicitly on failure.
+   - Turn watchdog uses adaptive timeout: initial slice 210s (3.5 min) with up to 2 extensions (+2 min each, ~7.5 min max) if `antigravity_bridge.is_agent_alive(user_id)` is True, updating live placeholder status in Telegram. Subprocesses are cleaned via `os.killpg` on task completion, `/stop`, or timeout.
+
 ---
 
 ## 🛠️ Verification & Test Recipes

@@ -91,6 +91,22 @@ class LiveStreamer:
     async def update_text(self, new_chunk: str):
         self.accumulated_text += new_chunk
 
+    async def update_status(self, text: str):
+        """
+        Updates the placeholder indicator text in-place (e.g. for adaptive watchdog extensions).
+        """
+        if not self.message_id or self.is_finalized:
+            return
+        try:
+            await self.bot.edit_message_text(
+                chat_id=self.chat_id,
+                message_id=self.message_id,
+                text=text,
+                parse_mode="HTML"
+            )
+        except Exception as e:
+            logger.debug(f"Не удалось обновить статус стримера: {e}")
+
     async def finalize(
         self,
         extra_blocks: Optional[List[str]] = None,

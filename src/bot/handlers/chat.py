@@ -7,7 +7,9 @@ from urllib.parse import unquote
 from pathlib import Path
 from typing import Optional, List, Dict
 from dataclasses import dataclass
+import aiohttp
 from aiogram import Router, types, Bot, F
+from aiogram.exceptions import TelegramNetworkError
 from aiogram.types import InlineKeyboardMarkup, InlineKeyboardButton, FSInputFile, BufferedInputFile
 from src.engine.session_manager import session_manager
 from src.engine.antigravity_bridge import antigravity_bridge, EngineEvent
@@ -30,9 +32,54 @@ TEXT_FILE_EXTENSIONS = {
 _LAST_USER_PROMPT: Dict[int, str] = {}
 _ACTIVE_USER_TASKS: Dict[int, asyncio.Task] = {}
 _MEDIA_GROUPS: Dict[str, List[types.Message]] = {}
-TASK_WATCHDOG_TIMEOUT_SECONDS = 300  # 5 minutes maximum turn runtime
+
+# Adaptive watchdog timeouts (bounded turn limits)
+BASE_TURN_TIMEOUT_SECONDS = 210       # 3.5 minutes base slice
+WATCHDOG_EXTENSION_SECONDS = 120      # +2 minutes extension when agent is alive
+MAX_WATCHDOG_EXTENSIONS = 2           # Maximum 2 extensions (hard cap at ~7.5 minutes)
+
 MAX_QUEUE_SIZE = 10
 _USER_QUEUES: Dict[int, asyncio.Queue] = {}
+
+
+async def _download_media_with_retry(
+    bot: Bot,
+    file_or_id,
+    destination,
+    max_attempts: int = 3,
+    timeout_per_try: float = 15.0
+) -> bool:
+    """
+    Downloads media with bounded retries for transient network/SSL errors.
+    Returns True on success, False if all attempts fail.
+    """
+    for attempt in range(1, max_attempts + 1):
+        try:
+            if isinstance(destination, io.BytesIO):
+                destination.seek(0)
+                destination.truncate(0)
+            elif isinstance(destination, Path) and destination.exists():
+                try:
+                    destination.unlink()
+                except OSError:
+                    pass
+
+            await asyncio.wait_for(
+                bot.download(file=file_or_id, destination=destination),
+                timeout=timeout_per_try
+            )
+            return True
+        except (TelegramNetworkError, aiohttp.ClientError, asyncio.TimeoutError, ConnectionError, OSError) as exc:
+            logger.warning(f"Media download attempt {attempt}/{max_attempts} failed: {exc}")
+            if attempt < max_attempts:
+                await asyncio.sleep(2.0)
+            else:
+                logger.error(f"Media download permanently failed after {max_attempts} attempts: {exc}")
+                return False
+        except Exception as exc:
+            logger.error(f"Non-transient media download error: {exc}", exc_info=True)
+            return False
+    return False
 
 
 @dataclass
@@ -135,6 +182,7 @@ async def _execute_single_prompt(item: QueuedPrompt):
         tool_blocks = []
         full_response_text = []
         was_cancelled = False
+        extensions_used = 0
 
         if active_chat.messages_count == 0:
             clean_title = prompt_text[:30].replace("\n", " ").strip()
@@ -178,12 +226,46 @@ async def _execute_single_prompt(item: QueuedPrompt):
                         err_lbl = "Execution error" if lang == "en" else "Ошибка выполнения"
                         thought_blocks.append(f"⚠️ <b>{err_lbl}:</b>\n<code>{event.content}</code>")
 
-            await asyncio.wait_for(_run_stream_loop(), timeout=TASK_WATCHDOG_TIMEOUT_SECONDS)
+            stream_task = asyncio.create_task(_run_stream_loop())
+            current_timeout = BASE_TURN_TIMEOUT_SECONDS
+
+            while True:
+                try:
+                    await asyncio.wait_for(asyncio.shield(stream_task), timeout=current_timeout)
+                    break
+                except asyncio.TimeoutError:
+                    if stream_task.done():
+                        await stream_task
+                        break
+                    if extensions_used < MAX_WATCHDOG_EXTENSIONS and antigravity_bridge.is_agent_alive(user_id):
+                        extensions_used += 1
+                        current_timeout = WATCHDOG_EXTENSION_SECONDS
+                        ext_mins = WATCHDOG_EXTENSION_SECONDS // 60
+                        logger.info(
+                            f"Extending watchdog for user {user_id} by {WATCHDOG_EXTENSION_SECONDS}s "
+                            f"(extension {extensions_used}/{MAX_WATCHDOG_EXTENSIONS}) because agent process is alive."
+                        )
+                        ext_notice = t("turn_extended_network_lag", lang, mins=ext_mins)
+                        await streamer.update_status(ext_notice)
+                        continue
+                    else:
+                        stream_task.cancel()
+                        try:
+                            await stream_task
+                        except (asyncio.CancelledError, asyncio.TimeoutError):
+                            pass
+                        raise asyncio.TimeoutError()
 
         except asyncio.TimeoutError:
-            logger.warning(f"Task for user {user_id} hit watchdog timeout ({TASK_WATCHDOG_TIMEOUT_SECONDS}s).")
+            total_elapsed_mins = (BASE_TURN_TIMEOUT_SECONDS + extensions_used * WATCHDOG_EXTENSION_SECONDS) // 60
+            logger.warning(
+                f"Task for user {user_id} hit watchdog timeout after {extensions_used} extensions (~{total_elapsed_mins} min)."
+            )
             antigravity_bridge.cancel_active_task(user_id)
-            timeout_lbl = "Task exceeded runtime limit (5 min watchdog timeout)" if lang == "en" else "Превышен лимит времени выполнения задачи (таймаут 5 мин)"
+            if extensions_used > 0:
+                timeout_lbl = t("turn_watchdog_timeout_extended", lang, mins=total_elapsed_mins)
+            else:
+                timeout_lbl = "Task exceeded runtime limit (watchdog timeout)" if lang == "en" else "Превышен лимит времени выполнения задачи (таймаут)"
             thought_blocks.append(f"⏱ <b>{timeout_lbl}</b>")
 
         except asyncio.CancelledError:
@@ -430,18 +512,27 @@ async def _process_media_group(messages: List[types.Message], bot: Bot):
         if m.photo:
             photo = m.photo[-1]
             file_path = uploads_dir / f"photo_{ts}_{idx}.jpg"
-            await bot.download(photo, destination=file_path)
-            file_links.append(f"{idx}. [photo_{ts}_{idx}.jpg](file://{file_path.resolve()})")
+            if await _download_media_with_retry(bot, photo, file_path):
+                file_links.append(f"{idx}. [photo_{ts}_{idx}.jpg](file://{file_path.resolve()})")
+            else:
+                logger.warning(f"Failed to download photo {idx} in media group after retries.")
         elif m.document:
             doc = m.document
             safe_name = "".join(c for c in (doc.file_name or "file") if c.isalnum() or c in "._-")
             file_path = uploads_dir / f"{ts}_{idx}_{safe_name}"
-            await bot.download(doc, destination=file_path)
-            file_links.append(f"{idx}. [{doc.file_name}](file://{file_path.resolve()})")
+            if await _download_media_with_retry(bot, doc, file_path):
+                file_links.append(f"{idx}. [{doc.file_name}](file://{file_path.resolve()})")
+            else:
+                logger.warning(f"Failed to download document {idx} in media group after retries.")
 
-    file_list_str = "\n".join(file_links)
     session = session_manager.get_session(user_id)
     lang = session.language
+
+    if not file_links:
+        await first_msg.reply(t("media_download_failed", lang), parse_mode="HTML")
+        return
+
+    file_list_str = "\n".join(file_links)
     header = f"User attached an album with {len(file_links)} images/files:" if lang == "en" else f"Пользователь прикрепил альбом из {len(file_links)} изображений/файлов:"
 
     prompt_text = f"{header}\n{file_list_str}\n\n{caption}".strip()
@@ -689,7 +780,11 @@ async def handle_voice_message(message: types.Message, bot: Bot):
 
     try:
         file_io = io.BytesIO()
-        await bot.download(file=file_id, destination=file_io)
+        download_ok = await _download_media_with_retry(bot, file_id, file_io)
+        if not download_ok:
+            err_msg = t("media_download_failed", lang)
+            await status_msg.edit_text(err_msg, parse_mode="HTML")
+            return
         audio_bytes = file_io.getvalue()
 
         transcribed_text = await voice_transcriber.transcribe_audio_bytes(audio_bytes)
@@ -739,12 +834,17 @@ async def handle_photo_message(message: types.Message, bot: Bot):
         return
 
     # Single photo
+    session = session_manager.get_session(message.from_user.id)
+    lang = session.language
     photo = message.photo[-1]
     ts = time.strftime("%Y%m%d_%H%M%S")
     uploads_dir = ensure_uploads_dir()
     file_path = uploads_dir / f"photo_{ts}.jpg"
 
-    await bot.download(photo, destination=file_path)
+    download_ok = await _download_media_with_retry(bot, photo, file_path)
+    if not download_ok:
+        await message.reply(t("media_download_failed", lang), parse_mode="HTML")
+        return
 
     caption = message.caption or ""
     prompt_text = f"User attached image: [photo_{ts}.jpg](file://{file_path.resolve()})\n\n{caption}".strip()
@@ -773,13 +873,18 @@ async def handle_document_message(message: types.Message, bot: Bot):
         return
 
     # Single document
+    session = session_manager.get_session(message.from_user.id)
+    lang = session.language
     doc = message.document
     ts = time.strftime("%Y%m%d_%H%M%S")
     safe_name = "".join(c for c in (doc.file_name or "file") if c.isalnum() or c in "._-")
     uploads_dir = ensure_uploads_dir()
     file_path = uploads_dir / f"{ts}_{safe_name}"
 
-    await bot.download(doc, destination=file_path)
+    download_ok = await _download_media_with_retry(bot, doc, file_path)
+    if not download_ok:
+        await message.reply(t("media_download_failed", lang), parse_mode="HTML")
+        return
 
     caption = message.caption or ""
     prompt_text = f"User attached document: [{doc.file_name}](file://{file_path.resolve()})\n\n{caption}".strip()

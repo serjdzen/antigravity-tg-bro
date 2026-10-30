@@ -194,6 +194,24 @@ class AntigravityBridge:
                         pass
         return False
 
+    def is_agent_alive(self, user_id: int) -> bool:
+        """
+        Проверяет, запущен ли и активен ли сейчас процесс agy CLI для указанного пользователя.
+        """
+        agent_proc = self._active_agents.get(user_id)
+        if not agent_proc:
+            return False
+        if hasattr(agent_proc, "returncode") and agent_proc.returncode is not None:
+            return False
+        pid = getattr(agent_proc, "pid", None)
+        if pid is not None:
+            try:
+                os.kill(pid, 0)
+                return True
+            except (ProcessLookupError, OSError):
+                return False
+        return agent_proc.returncode is None
+
     async def stream_chat(
         self,
         user_id: int,
@@ -240,7 +258,7 @@ class AntigravityBridge:
         model_name: Optional[str] = None,
         effort: str = "high",
         custom_focus: str = "",
-        timeout_seconds: int = 90
+        timeout_seconds: int = 240
     ) -> Optional[str]:
         """
         Генерирует нативное структурированное резюме сессии через agy CLI (Stateful Handover).
@@ -282,8 +300,12 @@ class AntigravityBridge:
             elif "flash" in model_name.lower():
                 cmd.extend(["--model", "gemini-3.8-flash"])
 
+        proc = None
         try:
-            logger.info(f"Запуск генерации резюме для сессии {conversation_id} (effort: {clean_effort})...")
+            logger.info(
+                f"Запуск генерации резюме для сессии {conversation_id} "
+                f"(effort: {clean_effort}, таймаут: {timeout_seconds}с)..."
+            )
             proc = await asyncio.create_subprocess_exec(
                 *cmd,
                 stdout=asyncio.subprocess.PIPE,
@@ -299,8 +321,26 @@ class AntigravityBridge:
                 err_text = stderr_bytes.decode("utf-8", errors="replace").strip()
                 logger.warning(f"Команда agy вернула пустой вывод резюме: {err_text}")
                 return None
+        except asyncio.TimeoutError:
+            logger.error(
+                f"Таймаут ({timeout_seconds}с) при нативной генерации резюме сессии {conversation_id}. "
+                f"Процесс CLI принудительно завершается."
+            )
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
+            return None
         except Exception as exc:
-            logger.error(f"Ошибка при нативной генерации резюме сессии: {exc}")
+            logger.error(f"Ошибка при нативной генерации резюме сессии: {exc!r}")
+            if proc is not None:
+                try:
+                    proc.kill()
+                    await proc.wait()
+                except Exception:
+                    pass
             return None
 
     async def _stream_cli_chat(
@@ -465,11 +505,17 @@ class AntigravityBridge:
 
         finally:
             self._active_agents.pop(user_id, None)
+            if process and process.returncode is None:
+                try:
+                    pgid = os.getpgid(process.pid)
+                    os.killpg(pgid, signal.SIGTERM)
+                    process.kill()
+                except Exception:
+                    pass
 
-        if not conversation_id:
-            new_id = get_latest_cli_conversation_id(known_ids_before)
-            if new_id:
-                yield EngineEvent(event_type="conversation_id", content=new_id)
+        new_id = get_latest_cli_conversation_id(known_ids_before)
+        if new_id and new_id != conversation_id:
+            yield EngineEvent(event_type="conversation_id", content=new_id)
 
     async def _stream_sdk_chat(
         self,

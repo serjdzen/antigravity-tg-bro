@@ -1,3 +1,4 @@
+import asyncio
 import unittest
 from unittest.mock import AsyncMock, MagicMock, patch
 from pathlib import Path
@@ -6,6 +7,7 @@ from aiogram.types import Message, User, Chat, BotCommand
 from src.bot.utils.streamer import LiveStreamer
 from src.bot.handlers.chat import handle_compact_command
 from src.engine.session_manager import session_manager, UserSession
+from src.engine.antigravity_bridge import antigravity_bridge
 from src.bot.locales import t
 
 
@@ -171,6 +173,41 @@ class TestCompactAndMonitoring(unittest.IsolatedAsyncioTestCase):
             self.assertIn("<previous_context_summary>", passed_prompt)
             self.assertIn(dummy_summary, passed_prompt)
             self.assertIn("Привет, продолжим работу", passed_prompt)
+
+    async def test_generate_conversation_summary_success(self):
+        """Test successful summary generation with clean output."""
+        from pathlib import Path
+        with patch("asyncio.create_subprocess_exec") as mock_exec:
+            mock_proc = AsyncMock()
+            mock_proc.communicate = AsyncMock(return_value=("### 🎯 Summary text".encode("utf-8"), b""))
+            mock_exec.return_value = mock_proc
+
+            summary = await antigravity_bridge.generate_conversation_summary(
+                conversation_id="test-cid-123",
+                project_dir=Path("/tmp"),
+                timeout_seconds=240
+            )
+            self.assertEqual(summary, "### 🎯 Summary text")
+            self.assertTrue(mock_exec.called)
+
+    async def test_generate_conversation_summary_timeout(self):
+        """Test timeout during summary generation kills process and returns None."""
+        from pathlib import Path
+        with patch("asyncio.create_subprocess_exec") as mock_exec, \
+             patch("asyncio.wait_for", side_effect=asyncio.TimeoutError):
+            mock_proc = AsyncMock()
+            mock_proc.kill = unittest.mock.MagicMock()
+            mock_proc.wait = AsyncMock(return_value=0)
+            mock_exec.return_value = mock_proc
+
+            summary = await antigravity_bridge.generate_conversation_summary(
+                conversation_id="test-cid-timeout",
+                project_dir=Path("/tmp"),
+                timeout_seconds=5
+            )
+            self.assertIsNone(summary)
+            mock_proc.kill.assert_called_once()
+            mock_proc.wait.assert_awaited_once()
 
 
 if __name__ == "__main__":
