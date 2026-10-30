@@ -185,10 +185,14 @@ class TestCompactAndMonitoring(unittest.IsolatedAsyncioTestCase):
             summary = await antigravity_bridge.generate_conversation_summary(
                 conversation_id="test-cid-123",
                 project_dir=Path("/tmp"),
-                timeout_seconds=240
+                timeout_seconds=300
             )
             self.assertEqual(summary, "### 🎯 Summary text")
             self.assertTrue(mock_exec.called)
+            called_cmd = mock_exec.call_args[0]
+            self.assertIn("--effort", called_cmd)
+            effort_idx = called_cmd.index("--effort")
+            self.assertEqual(called_cmd[effort_idx + 1], "medium")
 
     async def test_generate_conversation_summary_timeout(self):
         """Test timeout during summary generation kills process and returns None."""

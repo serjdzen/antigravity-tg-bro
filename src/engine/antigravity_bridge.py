@@ -256,15 +256,15 @@ class AntigravityBridge:
         conversation_id: str,
         project_dir: Path,
         model_name: Optional[str] = None,
-        effort: str = "high",
+        effort: str = "medium",
         custom_focus: str = "",
-        timeout_seconds: int = 240
+        timeout_seconds: int = 300
     ) -> Optional[str]:
         """
         Генерирует нативное структурированное резюме сессии через agy CLI (Stateful Handover).
-        Использует effort: high, чтобы модель вдумчиво выделила все ключевые нюансы и решения без потери контекста.
+        Использует effort: medium и таймаут 300с (5 минут), чтобы ёмко выделить ключевые нюансы без долгого зависания.
         """
-        clean_effort = effort if effort in ["low", "medium", "high"] else "high"
+        clean_effort = effort if effort in ["low", "medium", "high"] else "medium"
         summary_prompt = (
             "Сформируй лаконичное, но ёмкое структурированное резюме (Executive Briefing) нашей текущей сессии "
             "для бесшовной передачи следующему агенту в чистый контекст (Stateful Handover). "

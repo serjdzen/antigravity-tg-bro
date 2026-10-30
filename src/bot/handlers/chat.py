@@ -682,11 +682,11 @@ async def handle_compact_command(message: types.Message, bot: Bot):
     text_parts = message.text.strip().split(maxsplit=1)
     custom_focus = text_parts[1].strip() if len(text_parts) > 1 else ""
 
-    # Status message while running high-effort summary
+    # Status message while running medium-effort summary
     status_msg = await message.reply(
-        "🧹 <i>Анализирую и сжимаю контекст сессии (effort: high)... Сохраняю ключевые договорённости.</i>"
+        "🧹 <i>Анализирую и сжимаю контекст сессии (effort: medium)... Сохраняю ключевые договорённости.</i>"
         if lang == "ru" else
-        "🧹 <i>Analyzing and compacting session context (effort: high)... Preserving key decisions.</i>",
+        "🧹 <i>Analyzing and compacting session context (effort: medium)... Preserving key decisions.</i>",
         parse_mode="HTML"
     )
 
@@ -695,7 +695,8 @@ async def handle_compact_command(message: types.Message, bot: Bot):
         conversation_id=old_conv_id,
         project_dir=Path(active_chat.project_dir),
         model_name=active_chat.model,
-        effort="high",
+        effort="medium",
+        timeout_seconds=300,
         custom_focus=custom_focus
     )
 
